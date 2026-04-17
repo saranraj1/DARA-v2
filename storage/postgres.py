@@ -220,7 +220,7 @@ class PostgresClient:
     # ─── Pattern Library ─────────────────────────────────────
 
     async def get_fix_template(
-        self, error_class: str, language: str | None = None
+        self, error_class: str, service: str | None = None
     ) -> PatternLibrary | None:
         async with self.session() as sess:
             query = (
@@ -232,6 +232,32 @@ class PostgresClient:
             )
             result = await sess.execute(query)
             return result.scalar_one_or_none()
+
+    async def upsert_pattern(self, pattern: dict) -> None:
+        """Insert or update a pattern_library entry from an accepted fix."""
+        async with self.session() as sess:
+            existing = await sess.execute(
+                select(PatternLibrary)
+                .where(PatternLibrary.error_class == pattern["error_class"])
+                .where(PatternLibrary.is_active.is_(True))
+                .limit(1)
+            )
+            row = existing.scalar_one_or_none()
+            if row:
+                # Increment success rate via moving average
+                row.success_rate = min(1.0, float(row.success_rate or 0.5) * 0.9 + 0.1)
+                row.example_fix = pattern.get("example_fix", row.example_fix)
+            else:
+                row = PatternLibrary(
+                    error_class=pattern["error_class"],
+                    language="python",
+                    fix_template=pattern.get("fix_strategy", "llm_single_file"),
+                    example_fix=pattern.get("example_fix", ""),
+                    success_rate=0.7,
+                    is_active=True,
+                )
+                sess.add(row)
+            await sess.commit()
 
     # ─── Metrics ─────────────────────────────────────────────
 

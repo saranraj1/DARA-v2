@@ -1,3 +1,5 @@
+﻿import pathlib, textwrap
+content = textwrap.dedent('''
 from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
@@ -86,3 +88,7 @@ class ContextBuilder:
             if c.line_start <= ln <= c.line_end:
                 return c
         return min(chunks, key=lambda c: abs(c.line_start - ln))
+''').lstrip()
+
+pathlib.Path(r'context\builder.py').write_text(content, encoding='utf-8')
+print('builder.py written OK')
