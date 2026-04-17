@@ -64,14 +64,18 @@ class ContextRetriever:
             logger.error("Batch embed failed: %s", e)
             return 0
         indexed = 0
+        import uuid as _uuid
         for chunk, vec in zip(chunks, vectors):
             try:
+                # Qdrant requires UUID or integer IDs — derive deterministic UUID from chunk path
+                qdrant_id = str(_uuid.uuid5(_uuid.NAMESPACE_URL, chunk.chunk_id))
                 await self._qdrant.upsert_code_chunk(
-                    chunk_id=chunk.chunk_id, vector=vec,
+                    chunk_id=qdrant_id, vector=vec,
                     payload={"file_path": chunk.file_path, "function_name": chunk.function_name,
                              "class_name": chunk.class_name, "language": chunk.language,
                              "service": service, "line_start": chunk.line_start,
-                             "line_end": chunk.line_end, "content": chunk.content})
+                             "line_end": chunk.line_end, "content": chunk.content,
+                             "chunk_id": chunk.chunk_id})   # keep original id in payload
                 indexed += 1
             except Exception as e:
                 logger.warning("Failed to index chunk %s: %s", chunk.chunk_id, e)

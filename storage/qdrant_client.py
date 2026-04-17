@@ -39,7 +39,8 @@ class QdrantStore:
 
     async def initialize(self) -> None:
         """Ensure both required collections exist with correct vector config."""
-        existing = {c.name for c in await self._client.get_collections().collections}  # type: ignore
+        response = await self._client.get_collections()
+        existing = {c.name for c in response.collections}
 
         if CODE_COLLECTION not in existing:
             await self._client.create_collection(

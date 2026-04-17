@@ -115,22 +115,22 @@ class Orchestrator:
         template = await self._memory.find_template(error)
         if template and template.get("success_rate", 0) >= 0.85:
             logger.info("Orchestrator: template hit for %s", error_id)
-            await self._pg.update_error_status(error_id, "fix_ready")
+            await self._pg.update_error_status(error_id, "fixed")
             result.status = "template_hit"
             result.stage_reached = "template"
             return result
 
         # Stage 3: Build context
         bundle = await self._builder.build(error)
-        result.stage_reached = "context_built"
-        await self._set_state(error_id, "context_built")
+        result.stage_reached = "analyzing"
+        await self._set_state(error_id, "analyzing")
         logger.info("Context: %s", bundle.summary())
 
         # Stage 4: DebuggerAgent
         root_cause = await self._debugger.analyze(bundle, error)
         result.root_cause = root_cause
-        result.stage_reached = "root_cause_found"
-        await self._set_state(error_id, "root_cause_found")
+        result.stage_reached = "analyzing"
+        await self._set_state(error_id, "analyzing")
         logger.info("Root cause: confidence=%.2f strategy=%s",
                     root_cause.confidence, root_cause.suggested_strategy)
 
@@ -148,21 +148,21 @@ class Orchestrator:
         # Stage 6: FixerAgent
         fix = await self._fixer.generate(root_cause, bundle, error)
         result.fix = fix
-        result.stage_reached = "fix_generated"
-        await self._set_state(error_id, "fix_generated")
+        result.stage_reached = "fixing"
+        await self._set_state(error_id, "fixing")
 
         # Stage 7: Validation
         tmp_fix_id = f"{error_id[:8]}-prelim"
         validation = await self._validator.validate(fix, tmp_fix_id)
         result.validation = validation
-        result.stage_reached = "validated"
+        result.stage_reached = "validating"
         logger.info("Validation: passed=%s issues=%d duration=%dms",
                     validation.passed, len(validation.blocking_issues), validation.total_duration_ms)
 
         # Stage 8: ReviewerAgent (sees validation context)
         review = await self._reviewer.review(fix, root_cause, error)
         result.review = review
-        result.stage_reached = "reviewed"
+        result.stage_reached = "validating"
         logger.info("Review: score=%.2f rec=%s", review.quality_score, review.overall_recommendation)
 
         # Gate: block if validation failed
@@ -195,18 +195,18 @@ class Orchestrator:
             await self._pg.update_fix_outcome(fix_id, "auto_accepted",
                                                "Auto-approved: high confidence, low risk, validation passed")
             await self._memory.record_success(error, fix, root_cause, "accepted")
-            await self._pg.update_error_status(error_id, "resolved")
+            await self._pg.update_error_status(error_id, "fixed")
             await self._pg.update_fix_validation(fix_id, {
                 "validation_pass": validation.passed,
                 "test_results": validation.test_results.as_dict() if validation.test_results else {},
             })
-            result.status = "auto_resolved"
-            result.stage_reached = "auto_resolved"
+            result.status = "fixed"
+            result.stage_reached = "fixed"
             logger.info("Orchestrator: AUTO-APPROVED fix=%s for error=%s", fix_id, error_id)
         else:
-            await self._pg.update_error_status(error_id, "fix_ready")
-            result.status = "fix_ready"
-            result.stage_reached = "fix_ready"
+            await self._pg.update_error_status(error_id, "fixed")
+            result.status = "fixed"
+            result.stage_reached = "fixed"
 
         # Stage 11: Slack notification
         slack_sent = await self._slack.notify_fix_ready(

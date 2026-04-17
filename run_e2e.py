@@ -1,4 +1,4 @@
-﻿"""
+"""
 DARA Phase 1 End-to-End Test with Real Docker Stack
 Requires: docker-compose.dev.yml services running (postgres, redis, qdrant)
 Run: python run_e2e.py
@@ -12,7 +12,7 @@ async def main():
     print("=" * 65)
     results = {}
 
-    # ── E1: Infrastructure health checks ──────────────────────
+    # -- E1: Infrastructure health checks ----------------------
     print("\nE1: Infrastructure health checks...")
     try:
         from storage.postgres import get_postgres
@@ -44,7 +44,7 @@ async def main():
         print("   Ensure Docker stack is running: docker compose -f docker-compose.dev.yml up -d")
         return
 
-    # ── E2: Ingest a real error via API ────────────────────────
+    # -- E2: Ingest a real error via API ------------------------
     print("\nE2: Error ingestion to Postgres...")
     error_id = None
     try:
@@ -65,7 +65,7 @@ async def main():
             r = await client.post("http://localhost:8000/api/v1/errors/ingest",
                                    json=payload,
                                    headers={"Authorization": "Bearer dara-dev-token"})
-        if r.status_code in (200, 201):
+        if r.status_code in (200, 201, 202):
             data = r.json()
             error_id = data.get("error_id") or data.get("id")
             print(f"   Ingested error_id: {error_id}")
@@ -78,7 +78,7 @@ async def main():
         results["E2"] = f"FAIL: {e}"
         print(f"E2: FAIL - {e}")
 
-    # ── E3: Context builder with real services ─────────────────
+    # -- E3: Context builder with real services -----------------
     print("\nE3: Context builder (AST + git + Qdrant)...")
     try:
         from context.builder import ContextBuilder
@@ -113,7 +113,7 @@ async def main():
         print(f"E3: FAIL - {e}")
         bundle = None
 
-    # ── E4: Index repo into Qdrant ─────────────────────────────
+    # -- E4: Index repo into Qdrant -----------------------------
     print("\nE4: Repository indexing into Qdrant...")
     try:
         from context.ast_chunker import ASTChunker
@@ -133,7 +133,7 @@ async def main():
         results["E4"] = f"FAIL: {e}"
         print(f"E4: FAIL - {e}")
 
-    # ── E5: Orchestrator full pipeline (if error ingested) ─────
+    # -- E5: Orchestrator full pipeline (if error ingested) -----
     print("\nE5: Full orchestrator pipeline (real LLM calls)...")
     if not error_id:
         print("   SKIP: no error_id (E2 failed)")
@@ -166,11 +166,11 @@ async def main():
             results["E5"] = f"FAIL: {e}"
             print(f"E5: FAIL - {e}")
 
-    # ── E6: Redis pipeline state tracking ─────────────────────
+    # -- E6: Redis pipeline state tracking ---------------------
     print("\nE6: Redis state tracking...")
     try:
         await redis.set_pipeline_state("e2e-test", "status", "testing")
-        val = await redis.get_pipeline_state("e2e-test", "status")
+        state = await redis.get_pipeline_state('e2e-test'); val = state.get('status') if isinstance(state,dict) else state
         assert val == "testing", f"Expected 'testing', got {val}"
         results["E6"] = "PASS"
         print(f"   Redis round-trip: set='testing' get='{val}'")
@@ -179,7 +179,7 @@ async def main():
         results["E6"] = f"FAIL: {e}"
         print(f"E6: FAIL - {e}")
 
-    # ── Summary ────────────────────────────────────────────────
+    # -- Summary ------------------------------------------------
     print("\n" + "=" * 65)
     print("E2E TEST SUMMARY")
     print("=" * 65)
@@ -194,7 +194,7 @@ async def main():
     if failed == 0:
         print("\nPHASE 1 E2E: ALL TESTS PASSED")
     else:
-        print(f"\nFAILED: {failed} tests — check Docker stack and API server")
+        print(f"\nFAILED: {failed} tests � check Docker stack and API server")
         sys.exit(1)
 
 asyncio.run(main())

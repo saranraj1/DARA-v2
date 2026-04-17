@@ -1,4 +1,4 @@
-﻿"""DARA - Celery tasks: thin wrappers that delegate to Orchestrator"""
+"""DARA - Celery tasks: thin wrappers that delegate to Orchestrator"""
 from __future__ import annotations
 import asyncio, logging
 from workers.main import celery_app
