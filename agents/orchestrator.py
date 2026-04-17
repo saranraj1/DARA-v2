@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
@@ -14,6 +14,7 @@ from output.github_pr import GitHubPRCreator
 from output.slack_notifier import SlackNotifier
 from storage.postgres import PostgresClient
 from storage.redis_client import RedisClient
+from storage.qdrant_client import get_qdrant
 from validation.engine import ValidationEngine, ValidationReport
 
 logger = logging.getLogger(__name__)
@@ -69,7 +70,7 @@ class Orchestrator:
         self._redis = redis
         self._llm = llm_router
         self._settings = get_settings()
-        retriever = ContextRetriever(qdrant=None, llm_router=llm_router)
+        retriever = ContextRetriever(qdrant=get_qdrant(), llm_router=llm_router)
         self._builder = ContextBuilder(retriever=retriever, repo_path=repo_path)
         self._debugger = DebuggerAgent(llm_router=llm_router)
         self._fixer = FixerAgent(llm_router=llm_router)
