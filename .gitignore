@@ -1,0 +1,29 @@
+# Secrets — NEVER commit these
+.env
+config/github_app.pem
+*.pem
+*.key
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+dist/
+build/
+
+# Temp / scratch
+verify_server.py
+*.log
+
+# IDE
+.vscode/
+.idea/
+
+# Docker volumes (local)
+postgres_data/
+redis_data/
+qdrant_data/
+neo4j_data/
+minio_data/
