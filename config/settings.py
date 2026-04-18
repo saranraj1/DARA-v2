@@ -187,8 +187,13 @@ class Settings(
         default="dara-admin-secret",
         description="X-Admin-Token header value for admin API protection",
     )
+    rate_limit_per_minute: int = Field(
+        default=60,
+        description="Max requests per minute per API key (sliding window)",
+    )
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = Field(default="INFO")
     cors_origins: list[str] = Field(default=["http://localhost:3000"])
+
 
 
     @computed_field  # type: ignore[prop-decorator]

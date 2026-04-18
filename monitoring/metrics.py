@@ -110,3 +110,11 @@ pattern_library_size = Gauge(
     "dara_pattern_library_size",
     "Number of active patterns in the pattern library",
 )
+
+# -- Rate Limiting (Week 10-11) -------
+from prometheus_client import Counter as _Counter
+rate_limit_hits = _Counter(
+    'dara_rate_limit_hits_total',
+    'Number of requests rejected by rate limiter',
+    ['key_type'],
+)

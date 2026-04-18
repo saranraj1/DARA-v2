@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 import json, logging, re
 from pathlib import Path
 from context.builder import ContextBundle
@@ -51,6 +51,30 @@ class DebuggerAgent:
         if bundle.blame_info:
             bl = bundle.blame_info
             blame = f"Author: {bl.get('author','')} on {bl.get('date','')[:10]}"
+
+        # Week 9-10: BlameResult injection — if present, prepend high-confidence signal
+        blame_attribution = ""
+        if hasattr(bundle, "blame_result") and bundle.blame_result:
+            br = bundle.blame_result
+            if br.blame_confidence >= 0.5:
+                blame_attribution = (
+                    f"\n⚠️  BLAME ATTRIBUTION (confidence={br.blame_confidence:.0%}):\n"
+                    f"  Commit  : {br.commit_sha_short or 'unknown'}\n"
+                    f"  Author  : {br.author_name or br.author_email or 'unknown'}\n"
+                    f"  Message : {(br.commit_message or '')[:120]}\n"
+                    f"  Deployed: {br.hours_before_error:.1f}h before error\n"
+                    f"  Method  : {br.blame_method}\n"
+                    f"This commit is the MOST PROBABLE cause — investigate it first.\n"
+                )
+
+        # Week 8-9: cross-service context injection
+        cross_svc = ""
+        if hasattr(bundle, "cross_service_bundle") and bundle.cross_service_bundle:
+            cross_svc = (
+                f"\n=== CROSS-SERVICE CONTEXT ===\n"
+                f"{bundle.cross_service_bundle.as_prompt_block()}\n"
+            )
+
         return (self._prompt_template
             .replace("{{error_class}}", error.get("error_class",""))
             .replace("{{message}}", error.get("message","")[:500])
@@ -65,7 +89,9 @@ class DebuggerAgent:
             .replace("{{related_functions}}", related or "None found")
             .replace("{{recent_commits}}", commits or "No recent commits")
             .replace("{{similar_past_bugs}}", bugs or "No similar bugs found")
-            .replace("{{blame_info}}", blame or "Not available"))
+            .replace("{{blame_info}}", blame or "Not available")
+        ) + blame_attribution + cross_svc
+
 
     def _parse(self, raw: str, error: dict) -> RootCauseResult:
         data = self._extract_json(raw)
