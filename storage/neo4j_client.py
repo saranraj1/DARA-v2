@@ -80,25 +80,77 @@ class Neo4jClient:
             extra={"label": label, "count": len(nodes)},
         )
 
-    # ─── Schema / Indexes ────────────────────────────────────
-
     async def create_indexes(self) -> None:
         """Create all required Neo4j indexes on first startup."""
-        indexes = [
-            "CREATE INDEX func_name IF NOT EXISTS FOR (n:Function) ON (n.name)",
-            "CREATE INDEX func_id IF NOT EXISTS FOR (n:Function) ON (n.id)",
-            "CREATE INDEX file_path IF NOT EXISTS FOR (n:File) ON (n.path)",
-            "CREATE INDEX service_name IF NOT EXISTS FOR (n:Service) ON (n.name)",
-            "CREATE INDEX error_pattern IF NOT EXISTS FOR (n:ErrorPattern) ON (n.error_class)",
-            "CREATE INDEX fix_template IF NOT EXISTS FOR (n:FixTemplate) ON (n.template_id)",
-            "CREATE INDEX cascade_trace IF NOT EXISTS FOR (n:FailureCascade) ON (n.trace_id)",
-        ]
-        for cypher in indexes:
+        from graph.queries import INDEXES
+        for cypher in INDEXES:
             try:
                 await self.execute_write(cypher)
             except Exception as e:
-                # Indexes may already exist on subsequent startups
                 logger.debug("Index creation skipped", extra={"error": str(e)})
+
+    # ─── Service Topology (Week 7-8) ─────────────────────────
+
+    async def upsert_service_node(
+        self,
+        name: str,
+        repo_full_name: str | None = None,
+        language: str | None = None,
+    ) -> None:
+        """Create or update a Service node in Neo4j."""
+        from graph.queries import UPSERT_SERVICE
+        await self.execute_write(
+            UPSERT_SERVICE,
+            {"name": name, "repo_full_name": repo_full_name, "language": language},
+        )
+
+    async def upsert_service_call_edge(
+        self,
+        source: str,
+        target: str,
+        call_count: int = 1,
+        error_count: int = 0,
+        avg_latency_ms: float | None = None,
+    ) -> None:
+        """Upsert a CALLS relationship between two Service nodes."""
+        from graph.queries import UPSERT_SERVICE_CALL_EDGE
+        await self.execute_write(
+            UPSERT_SERVICE_CALL_EDGE,
+            {
+                "source": source,
+                "target": target,
+                "call_count": call_count,
+                "error_count": error_count,
+                "avg_latency_ms": avg_latency_ms,
+            },
+        )
+
+    async def get_upstream_services(
+        self, service_name: str, max_hops: int = 3
+    ) -> list[dict]:
+        """Return all services that call this service (transitively)."""
+        from graph.queries import GET_UPSTREAM_SERVICES
+        return await self.execute_query(
+            GET_UPSTREAM_SERVICES,
+            {"name": service_name, "hops": max_hops},
+        )
+
+    async def get_downstream_services(
+        self, service_name: str, max_hops: int = 3
+    ) -> list[dict]:
+        """Return all services this service calls (transitively)."""
+        from graph.queries import GET_DOWNSTREAM_SERVICES
+        return await self.execute_query(
+            GET_DOWNSTREAM_SERVICES,
+            {"name": service_name, "hops": max_hops},
+        )
+
+    async def get_full_topology(self) -> dict:
+        """Return full service graph as {nodes, edges}."""
+        from graph.queries import GET_FULL_TOPOLOGY, GET_ALL_SERVICE_NODES
+        edges = await self.execute_query(GET_FULL_TOPOLOGY)
+        nodes = await self.execute_query(GET_ALL_SERVICE_NODES)
+        return {"nodes": nodes, "edges": edges}
 
     # ─── Call Graph Operations ───────────────────────────────
 
@@ -132,44 +184,53 @@ class Neo4jClient:
         """
         await self.execute_write(cypher, {"caller_id": caller_id, "callee_id": callee_id})
 
-    # ─── Failure Cascade Operations ──────────────────────────
+    # ─── Failure Cascade (enhanced Week 7-8) ─────────────────
 
     async def store_failure_cascade(
         self,
         trace_id: str,
         root_service: str,
         affected_services: list[str],
+        propagation_path: list[str] | None = None,
+        blame_confidence: float = 0.0,
+        error_message: str | None = None,
     ) -> None:
-        cypher = """
-        MERGE (c:FailureCascade {trace_id: $trace_id})
-        SET c.root_service = $root_service,
-            c.affected_services = $affected_services,
-            c.recorded_at = datetime()
-        """
+        """Persist or update a FailureCascade node. Also links to root Service."""
+        from graph.queries import STORE_FAILURE_CASCADE, LINK_CASCADE_TO_SERVICE
         await self.execute_write(
-            cypher,
+            STORE_FAILURE_CASCADE,
             {
                 "trace_id": trace_id,
                 "root_service": root_service,
                 "affected_services": affected_services,
+                "propagation_path": propagation_path or [root_service],
+                "blame_confidence": blame_confidence,
+                "error_message": error_message,
             },
         )
+        try:
+            await self.execute_write(
+                LINK_CASCADE_TO_SERVICE,
+                {"trace_id": trace_id, "service_name": root_service},
+            )
+        except Exception:
+            pass  # Service node may not exist yet — non-fatal
 
     async def find_similar_cascades(
-        self, root_service: str, limit: int = 5
+        self,
+        root_service: str,
+        limit: int = 5,
+        exclude_trace_id: str = "",
     ) -> list[dict]:
-        cypher = """
-        MATCH (c:FailureCascade {root_service: $service})
-        OPTIONAL MATCH (c)-[:RESOLVED_BY]->(t:FixTemplate)
-        RETURN c.trace_id AS trace_id,
-               c.affected_services AS affected_services,
-               t.template_id AS fix_template_id,
-               t.success_rate AS template_success_rate
-        ORDER BY c.recorded_at DESC
-        LIMIT $limit
-        """
+        """Find past cascades with the same root service."""
+        from graph.queries import FIND_SIMILAR_CASCADES
         return await self.execute_query(
-            cypher, {"service": root_service, "limit": limit}
+            FIND_SIMILAR_CASCADES,
+            {
+                "root_service": root_service,
+                "limit": limit,
+                "exclude_trace_id": exclude_trace_id,
+            },
         )
 
     # ─── Institutional Memory Graph ──────────────────────────
@@ -216,3 +277,4 @@ def get_neo4j() -> Neo4jClient:
         s = get_settings()
         _neo4j_instance = Neo4jClient(s.neo4j_uri, s.neo4j_user, s.neo4j_password)
     return _neo4j_instance
+
