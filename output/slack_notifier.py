@@ -103,3 +103,18 @@ class SlackNotifier:
         except Exception as e:
             logger.error("Slack escalation failed: %s", e)
             return False
+
+    async def send_simple(self, text: str, channel: str | None = None) -> bool:
+        """Send a plain-text message to Slack. Used for HITL confirmations."""
+        if not self._client:
+            import logging as _l; _l.getLogger(__name__).info("Slack send_simple (no client): %s", text[:100])
+            return False
+        ch = channel or self._channel
+        if not ch:
+            return False
+        try:
+            await self._client.chat_postMessage(channel=ch, text=text)
+            return True
+        except Exception as e:
+            import logging as _l; _l.getLogger(__name__).error("Slack send_simple failed: %s", e)
+            return False

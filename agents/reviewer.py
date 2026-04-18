@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 import json, logging, re
 from pathlib import Path
 from api.models.agent_schemas import Fix, ReviewResult, RootCauseResult
@@ -44,27 +44,42 @@ class ReviewerAgent:
         data = self._extract_json(raw)
         score = min(1.0, max(0.0, float(data.get("quality_score", 0.5))))
         rec = data.get("overall_recommendation", "approve_with_comments")
-        if rec not in ("approve","approve_with_comments","reject"):
+        if rec not in ("approve", "approve_with_comments", "reject"):
             rec = "approve_with_comments"
         if fix.confidence_retained < 0.5 and rec == "approve":
             rec = "approve_with_comments"
+        # Never emit 0.0 score unless reviewer explicitly said so — 0.0 is our parse-fail sentinel
+        if score == 0.0 and not data:
+            score = 0.5
         return ReviewResult(
             quality_score=score,
             correctness_passes=bool(data.get("correctness_passes", True)),
             security_passes=bool(data.get("security_passes", True)),
             overall_recommendation=rec,
             rejection_reason=data.get("rejection_reason"),
-            reviewer_notes=data.get("reviewer_notes","No notes"),
-            issues=data.get("issues",[]),
+            reviewer_notes=data.get("reviewer_notes", "No notes"),
+            issues=data.get("issues", []),
         )
 
     def _extract_json(self, text: str) -> dict:
-        text = re.sub(r"```(?:json)?","",text).strip()
+        text = re.sub(r"```(?:json)?", "", text).strip()
+        # Try full JSON object first
         m = re.search(r"\{.*\}", text, re.DOTALL)
         if m:
             try:
                 return json.loads(m.group())
             except json.JSONDecodeError:
                 pass
-        logger.warning("ReviewerAgent: JSON parse failed")
+        # Try to extract individual fields as fallback
+        fallback: dict = {}
+        score_m = re.search(r'"quality_score"\s*:\s*([0-9.]+)', text)
+        if score_m:
+            fallback["quality_score"] = float(score_m.group(1))
+        rec_m = re.search(r'"overall_recommendation"\s*:\s*"([^"]+)"', text)
+        if rec_m:
+            fallback["overall_recommendation"] = rec_m.group(1)
+        if fallback:
+            return fallback
+        logger.warning("ReviewerAgent: JSON parse failed, using neutral fallback. raw=%s", text[:200])
         return {}
+

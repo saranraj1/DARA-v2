@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 import logging
 from config.settings import get_settings
 
@@ -96,7 +96,7 @@ class GitHubPRCreator:
     async def _get_installation_token(self) -> str | None:
         try:
             import time, jwt
-            pem_path = self._settings.github_private_key_path
+            pem_path = self._settings.resolved_pem_path
             if not pem_path or not __import__("pathlib").Path(pem_path).exists():
                 return None
             pem = __import__("pathlib").Path(pem_path).read_text()

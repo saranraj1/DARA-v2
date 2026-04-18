@@ -66,18 +66,32 @@ class GitHubSettings(BaseSettings):
 
     github_app_id: str = Field(..., description="GitHub App ID")
     github_private_key_path: str = Field(
-        default="config/github_app.pem",
-        description="Path to GitHub App private key (.pem)",
+        default="",
+        description="Path to GitHub App private key (.pem). Auto-detected if empty.",
     )
     github_webhook_secret: str = Field(..., description="GitHub webhook HMAC secret")
     github_installation_id: str = Field(..., description="GitHub App installation ID")
 
     @computed_field  # type: ignore[prop-decorator]
     @property
+    def resolved_pem_path(self) -> str:
+        """Resolve the .pem path: explicit env var > auto-detect in config/ > fallback."""
+        import pathlib
+        if self.github_private_key_path and pathlib.Path(self.github_private_key_path).exists():
+            return self.github_private_key_path
+        # Auto-detect: find first .pem in config/
+        config_dir = pathlib.Path("config")
+        pems = sorted(config_dir.glob("*.pem"))
+        if pems:
+            return str(pems[0])
+        return "config/github_app.pem"
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
     def github_private_key(self) -> str:
         """Load the private key from file at runtime."""
         try:
-            with open(self.github_private_key_path) as f:
+            with open(self.resolved_pem_path) as f:
                 return f.read()
         except FileNotFoundError:
             return ""
