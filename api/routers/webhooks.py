@@ -171,10 +171,13 @@ async def _run_approve_pipeline(
     from agents.memory import PatternMemory
     from config.llm_router import get_llm_router
     from storage.redis_client import get_redis
+    from storage.audit import get_audit_logger
+    from monitoring import metrics
 
     postgres = get_postgres()
     notifier = SlackNotifier()
     pr_creator = GitHubPRCreator()
+    audit = get_audit_logger(postgres)
 
     try:
         # 1. Load fix from DB
@@ -263,6 +266,16 @@ async def _run_approve_pipeline(
         except Exception as mem_err:
             logger.warning("HITL approve: pattern memory failed: %s", mem_err)
 
+        # Audit the approval
+        await audit.record(
+            action="fix_approved",
+            actor=f"@{slack_user}",
+            resource_type="fix",
+            resource_id=fix_id,
+            after_state={"pr_url": pr_url, "branch": branch, "patch_applied": apply_result.success},
+        )
+        metrics.hitl_decisions.labels(action="approve", channel="slack").inc()
+
         # 7. Send Slack confirmation
         msg = (
             f"Fix `{fix_id[:8]}` approved by @{slack_user}.\n"
@@ -271,7 +284,7 @@ async def _run_approve_pipeline(
         if pr_url:
             msg += f"GitHub PR created: {pr_url}"
         elif branch:
-            msg += f"Branch created: `{branch}` (PR creation skipped — no repo configured)"
+            msg += f"Branch created: `{branch}` (PR creation skipped \u2014 no repo configured)"
         else:
             msg += "Git commit skipped (no remote configured in dev mode)"
 
@@ -290,6 +303,8 @@ async def _run_reject_pipeline(
     from agents.memory import PatternMemory
     from config.llm_router import get_llm_router
     from storage.redis_client import get_redis
+    from storage.audit import get_audit_logger
+    from monitoring import metrics
 
     postgres = get_postgres()
     notifier = SlackNotifier()
@@ -319,6 +334,18 @@ async def _run_reject_pipeline(
         await notifier.send_simple(
             f"Fix `{fix_id[:8]}` rejected by @{slack_user}. Reason: {reason}"
         )
+
+        # Audit the rejection
+        audit = get_audit_logger(postgres)
+        await audit.record(
+            action="fix_rejected",
+            actor=f"@{slack_user}",
+            resource_type="fix",
+            resource_id=fix_id,
+            after_state={"reason": reason},
+        )
+        metrics.hitl_decisions.labels(action="reject", channel="slack").inc()
+
         logger.info("HITL reject: fix %s rejected by %s", fix_id, slack_user)
 
     except Exception as e:
