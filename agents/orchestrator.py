@@ -1,5 +1,6 @@
 from __future__ import annotations
 import logging
+import time
 from dataclasses import dataclass
 
 from agents.debugger import DebuggerAgent
@@ -10,6 +11,7 @@ from api.models.agent_schemas import Fix, ReviewResult, RootCauseResult
 from config.settings import get_settings
 from context.builder import ContextBuilder, ContextBundle
 from context.retriever import ContextRetriever
+from monitoring import metrics
 from output.github_pr import GitHubPRCreator
 from output.slack_notifier import SlackNotifier
 from storage.postgres import PostgresClient
@@ -82,14 +84,23 @@ class Orchestrator:
 
     async def run(self, error_id: str) -> PipelineResult:
         result = PipelineResult(error_id=error_id, status="started")
+        _t0 = time.perf_counter()
+        metrics.active_pipelines.inc()
         try:
-            return await self._run_pipeline(result)
+            r = await self._run_pipeline(result)
+            metrics.pipelines_total.labels(status=r.status).inc()
+            metrics.pipeline_duration.observe(time.perf_counter() - _t0)
+            return r
         except Exception as e:
             logger.error("Orchestrator fatal error for %s: %s", error_id, e, exc_info=True)
             result.status = "failed"
             result.failure_reason = str(e)
             await self._set_state(error_id, "failed")
+            metrics.pipelines_total.labels(status="failed").inc()
+            metrics.pipeline_duration.observe(time.perf_counter() - _t0)
             return result
+        finally:
+            metrics.active_pipelines.dec()
 
     async def _run_pipeline(self, result: PipelineResult) -> PipelineResult:
         error_id = result.error_id
@@ -150,6 +161,7 @@ class Orchestrator:
         result.fix = fix
         result.stage_reached = "fixing"
         await self._set_state(error_id, "fixing")
+        metrics.fixes_generated.labels(strategy=fix.strategy or "unknown").inc()
 
         # Stage 7: Validation
         tmp_fix_id = f"{error_id[:8]}-prelim"
@@ -164,6 +176,7 @@ class Orchestrator:
         result.review = review
         result.stage_reached = "validating"
         logger.info("Review: score=%.2f rec=%s", review.quality_score, review.overall_recommendation)
+        metrics.fixes_reviewed.labels(recommendation=review.overall_recommendation).inc()
 
         # Gate: block if validation failed
         if not validation.passed:

@@ -19,11 +19,14 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import py_compile
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
+
+from monitoring import metrics
 
 logger = logging.getLogger(__name__)
 
@@ -59,8 +62,10 @@ class PatchApplier:
         Returns PatchResult.
         """
         repo = Path(repo_path).resolve() if repo_path else self._repo
+        _t0 = time.perf_counter()
 
         if not patches:
+            metrics.patch_apply_total.labels(outcome="apply_failed").inc()
             return PatchResult(success=False, temp_dir=None, files_modified=[],
                                validation_passed=False, ruff_errors=[],
                                error="No patches provided")
@@ -68,6 +73,7 @@ class PatchApplier:
         # 1. Preflight — build unified diff string, extract file paths
         full_diff, files_in_diff = self._preflight(patches)
         if not full_diff:
+            metrics.patch_apply_total.labels(outcome="apply_failed").inc()
             return PatchResult(success=False, temp_dir=None, files_modified=[],
                                validation_passed=False, ruff_errors=[],
                                error="All patches have empty diffs")
@@ -75,6 +81,7 @@ class PatchApplier:
         # 2. Copy relevant files to temp dir
         temp_dir, backup_dir = self._copy_to_temp(repo, files_in_diff)
         if temp_dir is None:
+            metrics.patch_apply_total.labels(outcome="apply_failed").inc()
             return PatchResult(success=False, temp_dir=None, files_modified=[],
                                validation_passed=False, ruff_errors=[],
                                error="Failed to create temp directory")
@@ -83,12 +90,19 @@ class PatchApplier:
             # 3. Apply diff inside temp dir
             ok, apply_error = self._apply_diff(temp_dir, full_diff, files_in_diff)
             if not ok:
+                metrics.patch_apply_total.labels(outcome="apply_failed").inc()
                 return PatchResult(success=False, temp_dir=str(temp_dir), files_modified=[],
                                    validation_passed=False, ruff_errors=[],
                                    error=apply_error, original_backup=str(backup_dir))
 
             # 4. Validate patched files
             val_passed, ruff_errors = self._validate(temp_dir, files_in_diff)
+            metrics.patch_apply_duration.observe(time.perf_counter() - _t0)
+
+            if val_passed:
+                metrics.patch_apply_total.labels(outcome="success").inc()
+            else:
+                metrics.patch_apply_total.labels(outcome="validation_failed").inc()
 
             logger.info(
                 "PatchApplier: applied %d files to %s  validation=%s",
@@ -105,6 +119,7 @@ class PatchApplier:
 
         except Exception as exc:
             logger.error("PatchApplier: unexpected error: %s", exc, exc_info=True)
+            metrics.patch_apply_total.labels(outcome="apply_failed").inc()
             self._cleanup(temp_dir)
             return PatchResult(success=False, temp_dir=None, files_modified=[],
                                validation_passed=False, ruff_errors=[],

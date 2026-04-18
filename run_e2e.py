@@ -44,13 +44,18 @@ async def main():
         print("   Ensure Docker stack is running: docker compose -f docker-compose.dev.yml up -d")
         return
 
-    # -- E2: Ingest a real error via API ------------------------
+    # -- E2: Ingest a real error via direct DB (no API server needed) ---
     print("\nE2: Error ingestion to Postgres...")
     error_id = None
     try:
-        import httpx
-        payload = {
-            "source": "direct",
+        from ingestion.normalizer import ErrorNormalizer
+        from ingestion.classifier import ErrorClassifier
+        from ingestion.deduplicator import ErrorDeduplicator
+        normalizer = ErrorNormalizer()
+        classifier = ErrorClassifier()
+        deduper = ErrorDeduplicator()
+
+        raw = {
             "error_class": "AttributeError",
             "message": "NoneType object has no attribute get",
             "stack_trace": "File app.py line 42\n  user.get('id')\nAttributeError: NoneType",
@@ -58,25 +63,34 @@ async def main():
             "severity": "high",
             "file_path": "storage/postgres.py",
             "line_number": 42,
-            "commit_sha": "abc1234",
-            "branch": "main",
+            "source": "direct",
         }
-        async with httpx.AsyncClient(timeout=10) as client:
-            r = await client.post("http://localhost:8000/api/v1/errors/ingest",
-                                   json=payload,
-                                   headers={"Authorization": "Bearer dara-dev-token"})
-        if r.status_code in (200, 201, 202):
-            data = r.json()
-            error_id = data.get("error_id") or data.get("id")
-            print(f"   Ingested error_id: {error_id}")
-            results["E2"] = "PASS"
-            print("E2: PASS")
-        else:
-            results["E2"] = f"FAIL: HTTP {r.status_code}"
-            print(f"E2: FAIL - HTTP {r.status_code}: {r.text[:100]}")
+        normalized = normalizer.normalize(raw, source="direct")
+        classified = await classifier.classify(normalized)
+        sig = deduper.compute_signature(classified)
+        classified["signature"] = sig
+
+        error_id = await postgres.save_error(classified)
+        await postgres.create_pipeline_run(error_id)
+        print(f"   Ingested error_id: {error_id}")
+        print(f"   Signature: {sig[:16]}...")
+        results["E2"] = "PASS"
+        print("E2: PASS")
+
+        # E2b: Deduplication — same error should return existing_error_id
+        print("\nE2b: Deduplication check...")
+        dedup = await deduper.check(classified, postgres)
+        assert dedup.is_duplicate, "Same error should be detected as duplicate"
+        assert dedup.existing_error_id == error_id
+        results["E2b"] = "PASS"
+        print(f"   Dedup hit: existing_id={dedup.existing_error_id[:12]}... status={dedup.existing_status}")
+        print("E2b: PASS")
+
     except Exception as e:
         results["E2"] = f"FAIL: {e}"
+        results["E2b"] = "SKIP"
         print(f"E2: FAIL - {e}")
+
 
     # -- E3: Context builder with real services -----------------
     print("\nE3: Context builder (AST + git + Qdrant)...")

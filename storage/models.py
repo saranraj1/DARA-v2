@@ -61,6 +61,7 @@ class Error(Base):
     deploy_id: Mapped[str | None] = mapped_column(String(200))
     trace_id: Mapped[str | None] = mapped_column(String(100))  # OTel trace ID
     raw_payload: Mapped[dict | None] = mapped_column(JSONB)
+    signature: Mapped[str | None] = mapped_column(String(64))  # sha256 for dedup
     auto_fix_eligible: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
@@ -86,6 +87,7 @@ class Error(Base):
         Index("idx_errors_created_at", "created_at"),
         Index("idx_errors_error_class", "error_class"),
         Index("idx_errors_trace_id", "trace_id"),
+        Index("idx_errors_signature", "signature"),
     )
 
 
@@ -186,4 +188,32 @@ class PatternLibrary(Base):
     __table_args__ = (
         Index("idx_pattern_library_error_class", "error_class"),
         Index("idx_pattern_library_active", "is_active"),
+    )
+
+
+class AuditLog(Base):
+    """Immutable audit trail of all HITL decisions and admin actions."""
+    __tablename__ = "audit_log"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    action: Mapped[str] = mapped_column(String(100), nullable=False)
+    # e.g. fix_approved, fix_rejected, pipeline_retriggered, repo_reindexed
+    actor: Mapped[str | None] = mapped_column(String(200))
+    # slack username, API key fingerprint, or "system"
+    resource_type: Mapped[str | None] = mapped_column(String(50))
+    resource_id: Mapped[str | None] = mapped_column(String(200))
+    before_state: Mapped[dict | None] = mapped_column(JSONB)
+    after_state: Mapped[dict | None] = mapped_column(JSONB)
+    ip_address: Mapped[str | None] = mapped_column(String(50))
+    extra_data: Mapped[dict | None] = mapped_column(JSONB)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    __table_args__ = (
+        Index("idx_audit_log_action", "action"),
+        Index("idx_audit_log_actor", "actor"),
+        Index("idx_audit_log_created_at", "created_at"),
     )

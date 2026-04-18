@@ -107,3 +107,74 @@ async def _index(repo_path: str, service_name: str, extensions: list) -> dict:
     logger.info("index_repository: indexed=%d from %d files", indexed, files)
     return {"indexed": indexed, "total_chunks": len(all_chunks),
             "files": files, "service": service_name}
+
+
+@celery_app.task(name="workers.tasks.cleanup_stale_pipelines", bind=True)
+def cleanup_stale_pipelines(self, stale_after_minutes: int = 30) -> dict:
+    """Mark errors stuck in analyzing/fixing as failed after a timeout."""
+    logger.info("cleanup_stale_pipelines: running (stale_after=%dm)", stale_after_minutes)
+    try:
+        return _run(_cleanup_stale(stale_after_minutes))
+    except Exception as exc:
+        logger.error("cleanup_stale_pipelines FAILED: %s", exc, exc_info=True)
+        return {"cleaned": 0, "error": str(exc)}
+
+
+async def _cleanup_stale(minutes: int) -> dict:
+    from storage.postgres import get_postgres
+    pg = get_postgres()
+    count = await pg.cleanup_stale_errors(stale_after_minutes=minutes)
+    return {"cleaned": count, "stale_after_minutes": minutes}
+
+
+@celery_app.task(name="workers.tasks.warm_stats_cache", bind=True)
+def warm_stats_cache(self) -> dict:
+    """Pre-compute and cache pipeline stats for fast admin API response."""
+    logger.info("warm_stats_cache: running")
+    try:
+        return _run(_warm_stats())
+    except Exception as exc:
+        logger.error("warm_stats_cache FAILED: %s", exc, exc_info=True)
+        return {"cached": False, "error": str(exc)}
+
+
+async def _warm_stats() -> dict:
+    from storage.postgres import get_postgres
+    from storage.redis_client import get_redis
+    import json
+    pg = get_postgres()
+    redis = get_redis()
+    stats = await pg.get_pipeline_stats()
+    # Cache for 70 minutes (longer than the 60-minute schedule to avoid gaps)
+    await redis.client.setex("dara:stats:cache", 4200, json.dumps(stats))
+    logger.info("warm_stats_cache: cached stats=%s", stats)
+    return {"cached": True, "stats": stats}
+
+
+@celery_app.task(name="workers.tasks.optimize_pattern_library", bind=True)
+def optimize_pattern_library(self) -> dict:
+    """Deactivate patterns with very low success rates (<0.2)."""
+    logger.info("optimize_pattern_library: running")
+    try:
+        return _run(_optimize_patterns())
+    except Exception as exc:
+        logger.error("optimize_pattern_library FAILED: %s", exc, exc_info=True)
+        return {"deactivated": 0, "error": str(exc)}
+
+
+async def _optimize_patterns() -> dict:
+    from storage.postgres import get_postgres
+    from sqlalchemy import update
+    from storage.models import PatternLibrary
+    pg = get_postgres()
+    async with pg.session() as sess:
+        result = await sess.execute(
+            update(PatternLibrary)
+            .where(PatternLibrary.success_rate < 0.2)
+            .where(PatternLibrary.is_active == True)
+            .values(is_active=False)
+            .returning(PatternLibrary.id)
+        )
+        count = len(result.fetchall())
+    logger.info("optimize_pattern_library: deactivated %d low-rate patterns", count)
+    return {"deactivated": count}

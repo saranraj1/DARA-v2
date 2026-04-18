@@ -1,0 +1,76 @@
+{
+  "__requires": [{"type": "grafana","id": "grafana","name": "Grafana","version": "10.0.0"}],
+  "title": "DARA — Pipeline Overview",
+  "uid": "dara-overview",
+  "schemaVersion": 38,
+  "version": 1,
+  "refresh": "30s",
+  "time": {"from": "now-1h","to": "now"},
+  "panels": [
+    {
+      "id": 1,"type": "stat","title": "Errors Ingested (1h)",
+      "gridPos": {"h": 4,"w": 4,"x": 0,"y": 0},
+      "targets": [{"expr": "increase(dara_errors_ingested_total[1h])","legendFormat": "Errors"}],
+      "options": {"colorMode": "background","graphMode": "area","reduceOptions": {"calcs": ["lastNotNull"]}}
+    },
+    {
+      "id": 2,"type": "stat","title": "Pipelines Completed (1h)",
+      "gridPos": {"h": 4,"w": 4,"x": 4,"y": 0},
+      "targets": [{"expr": "increase(dara_pipelines_total[1h])","legendFormat": "Pipelines"}],
+      "options": {"colorMode": "background","graphMode": "area"}
+    },
+    {
+      "id": 3,"type": "stat","title": "Active Pipelines",
+      "gridPos": {"h": 4,"w": 4,"x": 8,"y": 0},
+      "targets": [{"expr": "dara_active_pipelines","legendFormat": "Active"}],
+      "options": {"colorMode": "value","thresholds": {"steps": [{"color": "green","value": 0},{"color": "yellow","value": 5},{"color": "red","value": 10}]}}
+    },
+    {
+      "id": 4,"type": "stat","title": "Duplicate Errors Blocked (1h)",
+      "gridPos": {"h": 4,"w": 4,"x": 12,"y": 0},
+      "targets": [{"expr": "increase(dara_duplicates_detected_total[1h])","legendFormat": "Dupes"}],
+      "options": {"colorMode": "background"}
+    },
+    {
+      "id": 5,"type": "stat","title": "Fix Acceptance Rate (1h)",
+      "gridPos": {"h": 4,"w": 4,"x": 16,"y": 0},
+      "targets": [{"expr": "increase(dara_hitl_decisions_total{action=\"approve\"}[1h]) / (increase(dara_hitl_decisions_total[1h]) + 0.001)","legendFormat": "Acceptance"}],
+      "options": {"colorMode": "background","unit": "percentunit"}
+    },
+    {
+      "id": 6,"type": "timeseries","title": "Pipeline Rate by Status",
+      "gridPos": {"h": 8,"w": 12,"x": 0,"y": 4},
+      "targets": [
+        {"expr": "rate(dara_pipelines_total{status=\"fixed\"}[5m])","legendFormat": "fixed"},
+        {"expr": "rate(dara_pipelines_total{status=\"failed\"}[5m])","legendFormat": "failed"},
+        {"expr": "rate(dara_pipelines_total{status=\"escalated\"}[5m])","legendFormat": "escalated"}
+      ]
+    },
+    {
+      "id": 7,"type": "timeseries","title": "Pipeline Duration (p50/p95/p99)",
+      "gridPos": {"h": 8,"w": 12,"x": 12,"y": 4},
+      "targets": [
+        {"expr": "histogram_quantile(0.50, rate(dara_pipeline_duration_seconds_bucket[5m]))","legendFormat": "p50"},
+        {"expr": "histogram_quantile(0.95, rate(dara_pipeline_duration_seconds_bucket[5m]))","legendFormat": "p95"},
+        {"expr": "histogram_quantile(0.99, rate(dara_pipeline_duration_seconds_bucket[5m]))","legendFormat": "p99"}
+      ]
+    },
+    {
+      "id": 8,"type": "timeseries","title": "LLM Request Rate by Provider",
+      "gridPos": {"h": 8,"w": 12,"x": 0,"y": 12},
+      "targets": [
+        {"expr": "rate(dara_llm_requests_total{status=\"success\"}[5m])","legendFormat": "{{provider}} success"},
+        {"expr": "rate(dara_llm_requests_total{status=\"cached\"}[5m])","legendFormat": "{{provider}} cached"}
+      ]
+    },
+    {
+      "id": 9,"type": "timeseries","title": "Patch Apply Outcomes",
+      "gridPos": {"h": 8,"w": 12,"x": 12,"y": 12},
+      "targets": [
+        {"expr": "rate(dara_patch_apply_total{outcome=\"success\"}[5m])","legendFormat": "success"},
+        {"expr": "rate(dara_patch_apply_total{outcome=\"validation_failed\"}[5m])","legendFormat": "validation failed"},
+        {"expr": "rate(dara_patch_apply_total{outcome=\"apply_failed\"}[5m])","legendFormat": "apply failed"}
+      ]
+    }
+  ]
+}

@@ -69,3 +69,10 @@ class ErrorIngestResponse(BaseModel):
     id: str
     status: str = "queued"
     message: str = "Error accepted for analysis"
+    deduplicated: bool = False
+    existing_status: str | None = None
+
+    def model_post_init(self, __context) -> None:
+        if self.deduplicated:
+            object.__setattr__(self, "message", f"Duplicate detected — existing pipeline is {self.existing_status}")
+            object.__setattr__(self, "status", self.existing_status or "active")

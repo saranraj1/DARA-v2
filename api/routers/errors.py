@@ -16,6 +16,7 @@ from api.models.error_schemas import (
 )
 from ingestion.classifier import ErrorClassifier
 from ingestion.normalizer import ErrorNormalizer
+from monitoring import metrics
 from storage.postgres import get_postgres
 from storage.redis_client import get_redis
 
@@ -49,9 +50,38 @@ async def ingest_error(
     # Classify synchronously (rule-based is instant)
     classified = await _classifier.classify(normalized)
 
-    # Persist to PostgreSQL
     postgres = get_postgres()
+
+    # ── Deduplication ─────────────────────────────────────────
+    from ingestion.deduplicator import ErrorDeduplicator
+    deduper = ErrorDeduplicator()
+    sig = deduper.compute_signature(classified)
+    classified["signature"] = sig
+
+    dedup = await deduper.check(classified, postgres)
+    if dedup.is_duplicate:
+        logger.info(
+            "Dedup: skipping %s (sig=%s...) — existing %s is %s",
+            classified["error_class"], sig[:12],
+            dedup.existing_error_id, dedup.existing_status,
+        )
+        metrics.duplicates_detected.labels(
+            service=classified.get("service") or "unknown"
+        ).inc()
+        return ErrorIngestResponse(
+            id=dedup.existing_error_id,
+            deduplicated=True,
+            existing_status=dedup.existing_status,
+        )
+
+    # Persist to PostgreSQL
     error_id = await postgres.save_error(classified)
+
+    # Emit ingestion metric
+    metrics.errors_ingested.labels(
+        service=classified.get("service") or "unknown",
+        severity=classified.get("severity") or "medium",
+    ).inc()
 
     # Push to Redis queue for Celery worker processing (graceful degradation)
     redis = get_redis()
@@ -64,7 +94,8 @@ async def ingest_error(
     await postgres.create_pipeline_run(error_id)
 
     logger.info("Error ingested", extra={"error_id": error_id, "error_class": classified["error_class"]})
-    return ErrorIngestResponse(id=error_id)
+    return ErrorIngestResponse(id=error_id, deduplicated=False)
+
 
 
 @router.get(

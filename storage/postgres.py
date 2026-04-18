@@ -1,4 +1,4 @@
-"""
+﻿"""
 DARA — PostgreSQL Async Client
 Provides async connection pooling, session management, and CRUD helpers
 for all core tables using SQLAlchemy 2.0 async ORM.
@@ -11,7 +11,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import AsyncGenerator
 
-from sqlalchemy import select, update
+from sqlalchemy import or_, select, update
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -20,7 +20,7 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from config.settings import get_settings
-from storage.models import Base, Error, Fix, PatternLibrary, PipelineRun
+from storage.models import AuditLog, Base, Error, Fix, PatternLibrary, PipelineRun
 
 logger = logging.getLogger(__name__)
 
@@ -82,11 +82,35 @@ class PostgresClient:
                 trace_id=error_data.get("trace_id"),
                 raw_payload=error_data.get("raw_payload"),
                 auto_fix_eligible=error_data.get("auto_fix_eligible", False),
+                signature=error_data.get("signature"),
             )
             sess.add(error)
             await sess.flush()
             logger.info("Saved error", extra={"error_id": str(error.id)})
             return str(error.id)
+
+    async def find_error_by_signature(
+        self,
+        signature: str,
+        active_statuses: list[str] | None = None,
+    ) -> dict | None:
+        """
+        Look up the most recent error matching this signature with an active status.
+        Returns a plain dict (id, status, created_at) or None.
+        """
+        statuses = active_statuses or ["pending", "analyzing", "fixing", "validating", "fixed"]
+        async with self.session() as sess:
+            result = await sess.execute(
+                select(Error)
+                .where(Error.signature == signature)
+                .where(Error.status.in_(statuses))
+                .order_by(Error.created_at.desc())
+                .limit(1)
+            )
+            row = result.scalar_one_or_none()
+            if row:
+                return {"id": str(row.id), "status": row.status, "created_at": row.created_at}
+            return None
 
     async def get_error(self, error_id: str) -> Error | None:
         async with self.session() as sess:
@@ -277,6 +301,51 @@ class PostgresClient:
                 "avg_confidence": round(float(avg_confidence or 0), 3),
             }
 
+
+
+    async def log_audit_event(
+        self,
+        action: str,
+        actor: str = "system",
+        resource_type: str | None = None,
+        resource_id: str | None = None,
+        before_state: dict | None = None,
+        after_state: dict | None = None,
+        ip_address: str | None = None,
+        metadata: dict | None = None,
+    ) -> str:
+        """Write an immutable audit event. Returns UUID. Never raises."""
+        try:
+            async with self.session() as sess:
+                entry = AuditLog(
+                    action=action, actor=actor,
+                    resource_type=resource_type, resource_id=resource_id,
+                    before_state=before_state, after_state=after_state,
+                    ip_address=ip_address, extra_data=metadata,
+                )
+                sess.add(entry)
+                await sess.flush()
+                return str(entry.id)
+        except Exception as e:
+            logger.warning("AuditLog write failed (non-fatal): %s", e)
+            return ""
+
+    async def cleanup_stale_errors(self, stale_after_minutes: int = 30) -> int:
+        """Mark errors stuck in analyzing/fixing as failed after timeout."""
+        from datetime import timedelta
+        cutoff = datetime.now(timezone.utc) - timedelta(minutes=stale_after_minutes)
+        async with self.session() as sess:
+            result = await sess.execute(
+                update(Error)
+                .where(Error.status.in_(["analyzing", "fixing"]))
+                .where(Error.created_at < cutoff)
+                .values(status="failed")
+                .returning(Error.id)
+            )
+            count = len(result.fetchall())
+            if count:
+                logger.warning("cleanup_stale_errors: marked %d errors as failed", count)
+            return count
 
 _postgres_instance: PostgresClient | None = None
 

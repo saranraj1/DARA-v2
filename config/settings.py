@@ -183,8 +183,13 @@ class Settings(
         default_factory=lambda: secrets.token_urlsafe(32),
         description="Secret key for API token signing",
     )
+    admin_api_key: str = Field(
+        default="dara-admin-secret",
+        description="X-Admin-Token header value for admin API protection",
+    )
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = Field(default="INFO")
     cors_origins: list[str] = Field(default=["http://localhost:3000"])
+
 
     @computed_field  # type: ignore[prop-decorator]
     @property
