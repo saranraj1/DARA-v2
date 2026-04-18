@@ -175,7 +175,7 @@ services:
 
   # ── Prometheus ────────────────────────────────────────────
   prometheus:
-    image: prom/prometheus:latest
+    image: prom/prometheus:v2.51.0
     container_name: dara_prometheus
     <<: [*restart-policy, *default-logging]
     command:
@@ -186,7 +186,7 @@ services:
     ports:
       - "9090:9090"
     volumes:
-      - ./docker/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus_data:/prometheus
     healthcheck:
       test: ["CMD-SHELL", "wget -O /dev/null -q http://localhost:9090/-/healthy || exit 1"]
@@ -196,20 +196,20 @@ services:
 
   # ── Grafana OSS ───────────────────────────────────────────
   grafana:
-    image: grafana/grafana-oss:latest
+    image: grafana/grafana-oss:10.4.0
     container_name: dara_grafana
     <<: [*restart-policy, *default-logging]
     environment:
       GF_SECURITY_ADMIN_USER: admin
       GF_SECURITY_ADMIN_PASSWORD: dara_dev
       GF_USERS_ALLOW_SIGN_UP: "false"
-      GF_INSTALL_PLUGINS: grafana-clock-panel,grafana-simple-json-datasource
+      GF_PATHS_PROVISIONING: /etc/grafana/provisioning
     ports:
       - "3000:3000"
     volumes:
       - grafana_data:/var/lib/grafana
-      - ./docker/grafana/datasources:/etc/grafana/provisioning/datasources:ro
-      - ./docker/grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/etc/grafana/dashboards:ro
     depends_on:
       prometheus:
         condition: service_healthy
@@ -221,17 +221,18 @@ services:
 
   # ── Jaeger Distributed Tracing ────────────────────────────
   jaeger:
-    image: jaegertracing/all-in-one:latest
+    image: jaegertracing/all-in-one:1.57
     container_name: dara_jaeger
     <<: [*restart-policy, *default-logging]
     environment:
       COLLECTOR_OTLP_ENABLED: "true"
       SPAN_STORAGE_TYPE: memory
+      MEMORY_MAX_TRACES: "50000"
     ports:
-      - "16686:16686"   # Jaeger UI
-      - "4317:4317"     # OTLP gRPC
-      - "4318:4318"     # OTLP HTTP
-      - "14268:14268"   # Jaeger HTTP collector
+      - "16686:16686"   # Jaeger UI  ← http://localhost:16686
+      - "4317:4317"     # OTLP gRPC  ← for OTel SDK
+      - "4318:4318"     # OTLP HTTP  ← primary endpoint used by DARA
+      - "14268:14268"   # Jaeger thrift HTTP collector
     healthcheck:
       test: ["CMD-SHELL", "wget -O /dev/null -q http://localhost:16686 || exit 1"]
       interval: 10s

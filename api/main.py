@@ -15,7 +15,8 @@ from fastapi.responses import JSONResponse
 from prometheus_fastapi_instrumentator import Instrumentator
 
 from api.middleware.logging import LoggingMiddleware
-from api.routers import admin, errors, fixes, health, metrics, webhooks
+from api.routers import admin, errors, fixes, health, metrics, traces, webhooks
+
 from config.settings import get_settings
 from storage.neo4j_client import get_neo4j
 from storage.postgres import get_postgres
@@ -105,7 +106,9 @@ app.include_router(errors.router, prefix="/api/v1", tags=["Errors"])
 app.include_router(fixes.router, prefix="/api/v1", tags=["Fixes"])
 app.include_router(webhooks.router, prefix="/api/v1", tags=["Webhooks"])
 app.include_router(metrics.router, prefix="/api/v1", tags=["Metrics"])
+app.include_router(traces.router, prefix="/api/v1", tags=["Traces"])
 app.include_router(admin.router, tags=["Admin"])  # prefix set inside admin.py
+
 
 
 # ── Global exception handler ─────────────────────────────────

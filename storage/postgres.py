@@ -1,4 +1,4 @@
-﻿"""
+"""
 DARA — PostgreSQL Async Client
 Provides async connection pooling, session management, and CRUD helpers
 for all core tables using SQLAlchemy 2.0 async ORM.
@@ -347,6 +347,204 @@ class PostgresClient:
                 logger.warning("cleanup_stale_errors: marked %d errors as failed", count)
             return count
 
+    # ── Distributed Traces (Week 6-7) ─────────────────────────
+
+    async def save_span(self, span) -> str:
+        """Persist a NormalisedSpan to distributed_traces. Returns UUID."""
+        from storage.models import DistributedTrace
+        import uuid as _uuid
+        async with self.session() as sess:
+            row = DistributedTrace(
+                id=_uuid.uuid4(),
+                trace_id=span.trace_id,
+                span_id=span.span_id,
+                parent_span_id=span.parent_span_id,
+                service_name=span.service_name,
+                operation_name=span.operation_name,
+                status_code=span.status_code,
+                status_message=span.status_message,
+                duration_ms=span.duration_ms,
+                attributes=span.attributes,
+                events=span.events,
+                started_at=span.started_at,
+            )
+            sess.add(row)
+            await sess.flush()
+            return str(row.id)
+
+    async def get_trace(self, trace_id: str) -> list[dict]:
+        """Return all spans for a trace_id, ordered by start time."""
+        from storage.models import DistributedTrace
+        from sqlalchemy import select
+        async with self.session() as sess:
+            rows = (
+                await sess.execute(
+                    select(DistributedTrace)
+                    .where(DistributedTrace.trace_id == trace_id)
+                    .order_by(DistributedTrace.started_at.asc())
+                )
+            ).scalars().all()
+            return [
+                {
+                    "id": str(r.id),
+                    "trace_id": r.trace_id,
+                    "span_id": r.span_id,
+                    "parent_span_id": r.parent_span_id,
+                    "service_name": r.service_name,
+                    "operation_name": r.operation_name,
+                    "status_code": r.status_code,
+                    "status_message": r.status_message,
+                    "duration_ms": r.duration_ms,
+                    "attributes": r.attributes or {},
+                    "started_at": r.started_at.isoformat(),
+                }
+                for r in rows
+            ]
+
+    async def list_traces(
+        self, service: str | None = None, error_only: bool = False, limit: int = 50
+    ) -> list[dict]:
+        """List distinct traces with summary info."""
+        from storage.models import DistributedTrace
+        from sqlalchemy import select, func, distinct
+        async with self.session() as sess:
+            q = (
+                select(
+                    DistributedTrace.trace_id,
+                    func.count(DistributedTrace.id).label("span_count"),
+                    func.min(DistributedTrace.started_at).label("started_at"),
+                    func.array_agg(distinct(DistributedTrace.service_name)).label("services"),
+                    func.sum(
+                        func.cast(DistributedTrace.status_code == "ERROR", Integer)
+                    ).label("error_span_count"),
+                )
+                .group_by(DistributedTrace.trace_id)
+                .order_by(func.min(DistributedTrace.started_at).desc())
+                .limit(limit)
+            )
+            if service:
+                q = q.where(DistributedTrace.service_name == service)
+            if error_only:
+                q = q.having(
+                    func.sum(func.cast(DistributedTrace.status_code == "ERROR", Integer)) > 0
+                )
+            rows = (await sess.execute(q)).all()
+            return [
+                {
+                    "trace_id": r.trace_id,
+                    "span_count": r.span_count,
+                    "started_at": r.started_at.isoformat() if r.started_at else None,
+                    "services": sorted(r.services) if r.services else [],
+                    "error_span_count": int(r.error_span_count or 0),
+                }
+                for r in rows
+            ]
+
+    async def upsert_topology_edge(
+        self,
+        source: str,
+        target: str,
+        call_count: int,
+        error_count: int,
+        avg_latency_ms: float | None,
+    ) -> None:
+        """Upsert a service→service call edge in service_topology."""
+        from sqlalchemy.dialects.postgresql import insert as pg_insert
+        from storage.models import ServiceTopology
+        import uuid as _uuid
+        from datetime import datetime, timezone
+        stmt = pg_insert(ServiceTopology).values(
+            id=_uuid.uuid4(),
+            source_service=source,
+            target_service=target,
+            call_count=call_count,
+            error_count=error_count,
+            avg_latency_ms=avg_latency_ms,
+            last_seen=datetime.now(timezone.utc),
+        ).on_conflict_do_update(
+            constraint="uq_topology_edge",
+            set_={
+                "call_count": ServiceTopology.call_count + call_count,
+                "error_count": ServiceTopology.error_count + error_count,
+                "avg_latency_ms": avg_latency_ms,
+                "last_seen": datetime.now(timezone.utc),
+            },
+        )
+        async with self.session() as sess:
+            await sess.execute(stmt)
+
+    async def get_topology(self) -> list[dict]:
+        """Return all service topology edges ordered by call count desc."""
+        from storage.models import ServiceTopology
+        from sqlalchemy import select
+        async with self.session() as sess:
+            rows = (
+                await sess.execute(
+                    select(ServiceTopology)
+                    .order_by(ServiceTopology.call_count.desc())
+                    .limit(200)
+                )
+            ).scalars().all()
+            return [
+                {
+                    "source_service": r.source_service,
+                    "target_service": r.target_service,
+                    "call_count": r.call_count,
+                    "error_count": r.error_count,
+                    "error_rate": round(r.error_count / r.call_count, 3) if r.call_count else 0,
+                    "avg_latency_ms": r.avg_latency_ms,
+                    "last_seen": r.last_seen.isoformat() if r.last_seen else None,
+                }
+                for r in rows
+            ]
+
+    async def save_deploy_event(self, event: dict) -> str:
+        """Save a CI/CD deploy event for blame attribution."""
+        from storage.models import DeployEvent
+        import uuid as _uuid
+        async with self.session() as sess:
+            row = DeployEvent(
+                id=_uuid.uuid4(),
+                service_name=event["service_name"],
+                commit_sha=event["commit_sha"],
+                branch=event.get("branch"),
+                environment=event.get("environment", "production"),
+                deployed_by=event.get("deployed_by"),
+                version_tag=event.get("version_tag"),
+                deployed_at=event["deployed_at"],
+            )
+            sess.add(row)
+            await sess.flush()
+            return str(row.id)
+
+    async def get_latest_deploy_before(
+        self, service_name: str, before: datetime
+    ) -> dict | None:
+        """Find the most recent deploy for a service before a given timestamp."""
+        from storage.models import DeployEvent
+        from sqlalchemy import select
+        async with self.session() as sess:
+            row = (
+                await sess.execute(
+                    select(DeployEvent)
+                    .where(DeployEvent.service_name == service_name)
+                    .where(DeployEvent.deployed_at <= before)
+                    .order_by(DeployEvent.deployed_at.desc())
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+            if not row:
+                return None
+            return {
+                "service_name": row.service_name,
+                "commit_sha": row.commit_sha,
+                "branch": row.branch,
+                "deployed_by": row.deployed_by,
+                "deployed_at": row.deployed_at.isoformat(),
+                "version_tag": row.version_tag,
+            }
+
+
 _postgres_instance: PostgresClient | None = None
 
 
@@ -355,3 +553,4 @@ def get_postgres() -> PostgresClient:
     if _postgres_instance is None:
         _postgres_instance = PostgresClient(get_settings().postgres_url)
     return _postgres_instance
+

@@ -1,0 +1,23 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  scrape_timeout: 10s
+
+  external_labels:
+    environment: development
+    project: dara
+
+scrape_configs:
+  # DARA FastAPI application
+  - job_name: dara_api
+    static_configs:
+      - targets: ["dara_api:8000"]
+    metrics_path: /api/v1/metrics
+    scrape_interval: 15s
+    scrape_timeout: 10s
+    honor_timestamps: true
+
+  # Prometheus self-monitoring
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]

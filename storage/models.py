@@ -9,6 +9,7 @@ from datetime import datetime
 
 from sqlalchemy import (
     ARRAY,
+    BigInteger,
     Boolean,
     CheckConstraint,
     DateTime,
@@ -19,8 +20,10 @@ from sqlalchemy import (
     Text,
     func,
 )
+import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+
 
 
 class Base(DeclarativeBase):
@@ -199,9 +202,7 @@ class AuditLog(Base):
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     action: Mapped[str] = mapped_column(String(100), nullable=False)
-    # e.g. fix_approved, fix_rejected, pipeline_retriggered, repo_reindexed
     actor: Mapped[str | None] = mapped_column(String(200))
-    # slack username, API key fingerprint, or "system"
     resource_type: Mapped[str | None] = mapped_column(String(50))
     resource_id: Mapped[str | None] = mapped_column(String(200))
     before_state: Mapped[dict | None] = mapped_column(JSONB)
@@ -216,4 +217,126 @@ class AuditLog(Base):
         Index("idx_audit_log_action", "action"),
         Index("idx_audit_log_actor", "actor"),
         Index("idx_audit_log_created_at", "created_at"),
+    )
+
+
+# ── Phase 2: Distributed Wedge Models ─────────────────────────
+
+
+class DistributedTrace(Base):
+    """
+    Individual OTel span ingested from any instrumented service.
+    Spans are grouped by trace_id into a full distributed trace.
+    Links back to errors.trace_id when an error is associated.
+    """
+    __tablename__ = "distributed_traces"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    trace_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    span_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    parent_span_id: Mapped[str | None] = mapped_column(String(32))
+    service_name: Mapped[str] = mapped_column(String(200), nullable=False)
+    operation_name: Mapped[str] = mapped_column(String(500), nullable=False)
+    # "ERROR", "OK", HTTP status code string, or gRPC status
+    status_code: Mapped[str | None] = mapped_column(String(20))
+    status_message: Mapped[str | None] = mapped_column(Text)
+    duration_ms: Mapped[int | None] = mapped_column(Integer)
+    # OTel span attributes: code.filepath, code.function, http.url, db.statement…
+    attributes: Mapped[dict | None] = mapped_column(JSONB)
+    events: Mapped[dict | None] = mapped_column(JSONB)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    ingested_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    __table_args__ = (
+        Index("idx_traces_trace_id", "trace_id"),
+        Index("idx_traces_service", "service_name"),
+        Index("idx_traces_status", "status_code"),
+        Index("idx_traces_started_at", "started_at"),
+        Index("idx_traces_service_error", "service_name", "status_code"),
+    )
+
+
+class ServiceTopology(Base):
+    """
+    Live call graph edge between two services.
+    Updated on every trace ingestion. Used by Fault Propagation Mapper.
+    """
+    __tablename__ = "service_topology"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    source_service: Mapped[str] = mapped_column(String(200), nullable=False)
+    target_service: Mapped[str] = mapped_column(String(200), nullable=False)
+    call_count: Mapped[int] = mapped_column(BigInteger, server_default="0", nullable=False)
+    error_count: Mapped[int] = mapped_column(BigInteger, server_default="0", nullable=False)
+    avg_latency_ms: Mapped[float | None] = mapped_column(Float)
+    first_seen: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    last_seen: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    __table_args__ = (
+        Index("idx_topology_source", "source_service"),
+        Index("idx_topology_target", "target_service"),
+        sa.UniqueConstraint("source_service", "target_service", name="uq_topology_edge"),
+    )
+
+
+class ServiceRegistry(Base):
+    """
+    Maps a service_name → GitHub repo. Used by CrossServiceContextBuilder
+    to fetch code from all services implicated in a distributed bug.
+    """
+    __tablename__ = "service_registry"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    service_name: Mapped[str] = mapped_column(String(200), nullable=False, unique=True)
+    repo_full_name: Mapped[str] = mapped_column(String(500), nullable=False)
+    primary_language: Mapped[str | None] = mapped_column(String(50))
+    default_branch: Mapped[str] = mapped_column(String(100), server_default="main", nullable=False)
+    description: Mapped[str | None] = mapped_column(Text)
+    registered_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    __table_args__ = (
+        Index("idx_service_registry_name", "service_name"),
+    )
+
+
+class DeployEvent(Base):
+    """
+    CI/CD deployment notification. Used by BlameAttributionEngine to correlate
+    git commits with production deploys and pinpoint culprit changes.
+    """
+    __tablename__ = "deploy_events"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    service_name: Mapped[str] = mapped_column(String(200), nullable=False)
+    commit_sha: Mapped[str] = mapped_column(String(64), nullable=False)
+    branch: Mapped[str | None] = mapped_column(String(300))
+    environment: Mapped[str] = mapped_column(String(50), server_default="production", nullable=False)
+    deployed_by: Mapped[str | None] = mapped_column(String(200))
+    version_tag: Mapped[str | None] = mapped_column(String(200))
+    deployed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    ingested_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    __table_args__ = (
+        Index("idx_deploy_service", "service_name"),
+        Index("idx_deploy_commit", "commit_sha"),
+        Index("idx_deploy_deployed_at", "deployed_at"),
+        Index("idx_deploy_service_time", "service_name", "deployed_at"),
     )
