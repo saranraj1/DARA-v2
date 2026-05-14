@@ -28,7 +28,6 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -172,8 +171,9 @@ class CrossServiceContextBuilder:
     async def _get_service_registry(self, service_name: str) -> dict | None:
         """Lookup service → repo mapping from ServiceRegistry in Postgres."""
         try:
-            from storage.models import ServiceRegistry
             from sqlalchemy import select
+
+            from storage.models import ServiceRegistry
             pg = self._get_pg()
             async with pg.session() as sess:
                 row = (
@@ -254,7 +254,9 @@ class CrossServiceContextBuilder:
             )
             return None
         try:
-            import httpx, base64
+            import base64
+
+            import httpx
             url = f"https://api.github.com/repos/{repo_full_name}/contents/{file_path}"
             headers = {
                 "Authorization": f"Bearer {self._token}",

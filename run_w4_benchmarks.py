@@ -1,19 +1,18 @@
-﻿import sys, time
+﻿import sys
+import time
+
 sys.path.insert(0, ".")
 print("=== DARA Week 4 Benchmarks ===\n")
 
 # B1: All agent imports
 t0 = time.perf_counter()
-from agents.debugger import DebuggerAgent
-from agents.fixer import FixerAgent
-from agents.reviewer import ReviewerAgent
-from agents.memory import PatternMemory
-from agents import DebuggerAgent, FixerAgent, ReviewerAgent, PatternMemory
+
 print(f"B1 Agent imports: OK in {(time.perf_counter()-t0)*1000:.0f}ms")
 print("B1 PASS")
 
 # B2: Pydantic schemas used by agents
-from api.models.agent_schemas import RootCauseResult, Fix, PatchFile, ReviewResult
+from api.models.agent_schemas import Fix, PatchFile, ReviewResult, RootCauseResult
+
 rc = RootCauseResult(
     immediate_cause="user obj is None",
     root_cause="Missing null check before .get() call",
@@ -30,7 +29,6 @@ assert rc.suggested_strategy in {"template_based","llm_single_file","llm_multi_f
 print("B2 PASS")
 
 # B3: PatchFile + Fix schemas
-from context.builder import ContextBundle
 pf = PatchFile(file_path="app.py", unified_diff="--- a/app.py\n+++ b/app.py\n@@ -42 +42 @@\n-user.get('id')\n+user.get('id') if user else None",
                lines_changed=2, change_description="Guard None before .get()")
 fix = Fix(error_id="test-error-001", patches=[pf], total_files_changed=1, total_lines_changed=2,
@@ -51,6 +49,7 @@ print("B4 PASS")
 
 # B5: Prompt files loadable
 from pathlib import Path
+
 for name in ["root_cause_v1.txt","fix_generator_v1.txt","reviewer_v1.txt"]:
     txt = Path(f"prompts/{name}").read_text(encoding="utf-8")
     assert "{{error_class}}" in txt or "{{patch_content}}" in txt or "{{immediate_cause}}" in txt, f"Bad prompt: {name}"
@@ -58,8 +57,8 @@ for name in ["root_cause_v1.txt","fix_generator_v1.txt","reviewer_v1.txt"]:
 print("B5 PASS")
 
 # B6: Celery tasks wired with agent pipeline
-from workers.tasks import analyze_error, index_repository
 from workers.main import celery_app
+
 worker_tasks = [k for k in celery_app.tasks if "workers" in k]
 print(f"\nB6 Celery tasks: {worker_tasks}")
 assert "workers.tasks.analyze_error" in celery_app.tasks
@@ -67,7 +66,9 @@ assert "workers.tasks.index_repository" in celery_app.tasks
 print("B6 PASS")
 
 # B7: DebuggerAgent JSON extractor logic (unit test without LLM)
-import json, re
+import json
+import re
+
 raw_llm_response = """
 Here is my analysis:
 
@@ -94,6 +95,7 @@ print("B7 PASS")
 
 # B8: difflib patch generation (core of FixerAgent)
 import difflib
+
 original = "def get_user(uid):\n    user = db.find(uid)\n    return user.get('name')\n"
 fixed    = "def get_user(uid):\n    user = db.find(uid)\n    return user.get('name') if user else None\n"
 diff = list(difflib.unified_diff(original.splitlines(keepends=True),

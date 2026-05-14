@@ -1,5 +1,12 @@
-﻿from __future__ import annotations
-import json, logging, os, shutil, subprocess, tempfile, time
+from __future__ import annotations
+
+import json
+import logging
+import os
+import shutil
+import subprocess
+import tempfile
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -46,9 +53,10 @@ class TestRunner:
                                  raw_output="No patches to test")
 
         # Create temp sandbox copy
-        sandbox = tempfile.mkdtemp(prefix="dara_sandbox_")
         t0 = time.perf_counter()
+        sandbox = None
         try:
+            sandbox = tempfile.mkdtemp(prefix="dara_sandbox_")
             return await self._run_in_sandbox(sandbox, patches, timeout_seconds)
         except Exception as e:
             logger.error("TestRunner failed: %s", e, exc_info=True)
@@ -57,7 +65,9 @@ class TestRunner:
                                  duration_ms=int((time.perf_counter()-t0)*1000),
                                  raw_output=f"TestRunner error: {e}")
         finally:
-            shutil.rmtree(sandbox, ignore_errors=True)
+            if sandbox:
+                shutil.rmtree(sandbox, ignore_errors=True)
+
 
     async def _run_in_sandbox(self, sandbox: str, patches: list[dict], timeout: int) -> TestRunResult:
         t0 = time.perf_counter()

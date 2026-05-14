@@ -1,9 +1,14 @@
 from __future__ import annotations
-import difflib, json, logging, re
+
+import difflib
+import json
+import logging
+import re
 from pathlib import Path
+
+from agents.strategies.router import StrategyRouter
 from api.models.agent_schemas import Fix, PatchFile, RootCauseResult
 from context.builder import ContextBundle
-from agents.strategies.router import StrategyRouter
 
 logger = logging.getLogger(__name__)
 PROMPT_PATH = Path("prompts/fix_generator_v1.txt")

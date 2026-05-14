@@ -1,4 +1,6 @@
-﻿import pathlib, textwrap
+﻿import pathlib
+import textwrap
+
 content = textwrap.dedent('''
 from __future__ import annotations
 import logging

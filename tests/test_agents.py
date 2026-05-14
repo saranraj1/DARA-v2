@@ -1,10 +1,15 @@
 ﻿"""Unit tests: agent logic (no LLM calls - pure unit tests)"""
-import json, re, sys, difflib
+import difflib
+import json
+import re
+import sys
+
 import pytest
+
 sys.path.insert(0,".")
 
-from api.models.agent_schemas import RootCauseResult, Fix, PatchFile, ReviewResult
-from context.builder import ContextBundle
+from api.models.agent_schemas import Fix, PatchFile, ReviewResult, RootCauseResult
+
 
 # ── JSON extractor (DebuggerAgent logic) ─────────────────────
 class TestJsonExtractor:

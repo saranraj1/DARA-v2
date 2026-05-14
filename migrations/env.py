@@ -1,32 +1,34 @@
 """DARA Alembic migration environment — synchronous (Alembic doesn't support async)."""
 from __future__ import annotations
 
+import os
+import sys
 from logging.config import fileConfig
 
 from alembic import context
 from sqlalchemy import engine_from_config, pool
 
-import sys
-import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from config.settings import get_settings
-from storage.models import Base  # noqa: F401 — registers all models
+from config.settings import get_settings  # noqa: E402
 
 settings = get_settings()
 config = context.config
 
-# Use SYNC psycopg2 URL for Alembic (async drivers don't work in sync Alembic)
+# Use SYNC psycopg2 URL for Alembic (asyncpg doesn't work in sync Alembic context)
 config.set_main_option("sqlalchemy.url", settings.sync_postgres_url)
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-target_metadata = Base.metadata
+# target_metadata = None → we use explicit migration files, not autogenerate.
+# This avoids importing storage/__init__.py (neo4j/redis/qdrant) which triggers
+# MemoryError on Windows when the neo4j driver initialises outside Docker.
+target_metadata = None
 
 
 def run_migrations_offline() -> None:
-    """Generate SQL without connecting — used for dry runs."""
+    """Generate SQL without connecting — used for dry runs / CI."""
     url = config.get_main_option("sqlalchemy.url")
     context.configure(
         url=url,

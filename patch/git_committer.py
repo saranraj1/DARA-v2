@@ -10,8 +10,8 @@ In Phase 3, will apply directly to working tree before committing.
 from __future__ import annotations
 
 import logging
-import subprocess
 import shutil
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional

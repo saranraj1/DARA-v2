@@ -6,7 +6,6 @@ sets up middleware, and wires up OpenTelemetry + Prometheus.
 from __future__ import annotations
 
 import logging
-import time
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
@@ -15,8 +14,8 @@ from fastapi.responses import JSONResponse
 from prometheus_fastapi_instrumentator import Instrumentator
 
 from api.middleware.logging import LoggingMiddleware
-from api.routers import admin, errors, fixes, health, metrics, traces, webhooks
-
+from api.routers import admin, auth, errors, fixes, health, metrics, traces, webhooks, events
+from api.routes.webhook_github import router as github_webhook_router
 from config.settings import get_settings
 from storage.neo4j_client import get_neo4j
 from storage.postgres import get_postgres
@@ -31,32 +30,48 @@ settings = get_settings()
 async def lifespan(app: FastAPI):  # type: ignore[type-arg]
     """
     Initialize all database connections on startup.
-    Gracefully close them on shutdown.
+    Heavy init (Neo4j indexes, Qdrant) runs in a background task
+    so the server starts accepting requests immediately.
+    Gracefully close connections on shutdown.
     """
+    import asyncio
+
     logger.info("Starting DARA API server")
 
-    # Initialize storage clients
+    # Initialize storage clients (fast — just builds client objects)
     postgres = get_postgres()
     redis = get_redis()
     qdrant = get_qdrant()
     neo4j = get_neo4j()
 
-    # Verify connectivity
-    if not await redis.ping():
-        logger.warning("Redis not reachable — caching disabled")
-
-    connected = await neo4j.verify_connectivity()
-    if connected:
-        await neo4j.create_indexes()
-
-    # Initialize Qdrant collections
+    # Fast check: Redis ping (non-blocking, short timeout)
     try:
-        await qdrant.initialize()
-    except Exception as e:
-        logger.warning("Qdrant initialization warning", extra={"error": str(e)})
+        if not await asyncio.wait_for(redis.ping(), timeout=3):
+            logger.warning("Redis not reachable — caching disabled")
+    except Exception:
+        logger.warning("Redis ping timed out — caching disabled")
 
-    logger.info("All storage clients initialized")
-    yield  # Application runs here
+    # Defer slow init (Neo4j index creation, Qdrant collection setup)
+    # to a background task so the server yields and becomes ready NOW.
+    async def _background_init() -> None:
+        try:
+            connected = await neo4j.verify_connectivity()
+            if connected:
+                await neo4j.create_indexes()
+                logger.info("Neo4j indexes ready")
+        except Exception as exc:
+            logger.warning("Neo4j init warning: %s", exc)
+        try:
+            await qdrant.initialize()
+            logger.info("Qdrant collections ready")
+        except Exception as exc:
+            logger.warning("Qdrant initialization warning: %s", exc)
+        logger.info("Background DB init complete")
+
+    asyncio.create_task(_background_init())
+
+    logger.info("DARA API server ready — background DB init in progress")
+    yield  # Application runs here (accepts requests immediately)
 
     # Cleanup
     await postgres.close()
@@ -88,7 +103,7 @@ app.add_middleware(
     allow_origins=settings.cors_origins,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PATCH"],
-    allow_headers=["Authorization", "Content-Type", "X-Request-ID", "X-Admin-Token"],
+    allow_headers=["Authorization", "Content-Type", "X-Request-ID", "X-Admin-Token", "X-Org-Id"],
 )
 
 # ── Prometheus metrics (HTTP request instrumentation) ────────
@@ -102,12 +117,16 @@ Instrumentator(
 
 # ── Routers ───────────────────────────────────────────────────
 app.include_router(health.router, tags=["Health"])
+app.include_router(auth.router, tags=["Auth"])   # Phase 4 — public
 app.include_router(errors.router, prefix="/api/v1", tags=["Errors"])
 app.include_router(fixes.router, prefix="/api/v1", tags=["Fixes"])
 app.include_router(webhooks.router, prefix="/api/v1", tags=["Webhooks"])
 app.include_router(metrics.router, prefix="/api/v1", tags=["Metrics"])
 app.include_router(traces.router, prefix="/api/v1", tags=["Traces"])
 app.include_router(admin.router, tags=["Admin"])  # prefix set inside admin.py
+app.include_router(events.router, prefix="/api/v1", tags=["Events"])
+# RLHF feedback webhook (GitHub PR lifecycle events)
+app.include_router(github_webhook_router, tags=["RLHF Feedback"])
 
 
 

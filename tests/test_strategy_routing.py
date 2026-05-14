@@ -11,10 +11,10 @@ Covers:
   - StrategyRouter.get_strategy_with_boost() returns (strategy, float)
 """
 import sys
+
 sys.path.insert(0, ".")
 
 from unittest.mock import MagicMock
-import pytest
 
 
 def _make_bundle(code="def foo(): pass", file="foo.py", function="foo"):
@@ -48,23 +48,22 @@ class TestStrategyRouter:
         assert len(strategies) == 8  # each maps to a distinct name
 
     def test_null_reference_routes_correctly(self):
-        from agents.strategies.router import StrategyRouter
-        from agents.strategies.router import NullReferenceStrategy
+        from agents.strategies.router import NullReferenceStrategy, StrategyRouter
         s = StrategyRouter.get_strategy("null_reference")
         assert isinstance(s, NullReferenceStrategy)
 
     def test_network_timeout_routes_correctly(self):
-        from agents.strategies.router import StrategyRouter, NetworkTimeoutStrategy
+        from agents.strategies.router import NetworkTimeoutStrategy, StrategyRouter
         s = StrategyRouter.get_strategy("network_timeout")
         assert isinstance(s, NetworkTimeoutStrategy)
 
     def test_unknown_class_falls_back_to_logic_error(self):
-        from agents.strategies.router import StrategyRouter, LogicErrorStrategy
+        from agents.strategies.router import LogicErrorStrategy, StrategyRouter
         s = StrategyRouter.get_strategy("totally_unknown_error_type")
         assert isinstance(s, LogicErrorStrategy)
 
     def test_case_insensitive_routing(self):
-        from agents.strategies.router import StrategyRouter, DatabaseErrorStrategy
+        from agents.strategies.router import DatabaseErrorStrategy, StrategyRouter
         s = StrategyRouter.get_strategy("DATABASE_ERROR")
         assert isinstance(s, DatabaseErrorStrategy)
 

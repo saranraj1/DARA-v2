@@ -23,7 +23,6 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 
-
 # ── Base Strategy ─────────────────────────────────────────────
 
 class BaseFixStrategy(ABC):
@@ -343,3 +342,36 @@ class StrategyRouter:
         strategy = StrategyRouter.get_strategy(error_class)
         boost = strategy.confidence_boost(root_cause, bundle)
         return strategy, boost
+
+    @staticmethod
+    async def get_db_driven_strategy(error_class: str) -> tuple[str | None, str | None]:
+        """
+        Phase 3: Check strategy_variants for an ACTIVE DB-driven override.
+        Returns (prompt_template, variant_name) or (None, None) if no active variant.
+
+        This makes the router live-reloadable — StrategyEvaluator can
+        promote a new variant to 'active' and it takes effect immediately
+        on the next request without any code deploy.
+        """
+        try:
+            from sqlalchemy import select
+
+            from storage.models import StrategyVariant
+            from storage.postgres import get_postgres
+            pg = get_postgres()
+            async with pg.session() as sess:
+                row = (await sess.execute(
+                    select(StrategyVariant)
+                    .where(
+                        StrategyVariant.error_class == error_class.lower().replace(" ", "_"),
+                        StrategyVariant.status == "active",
+                    )
+                    .order_by(StrategyVariant.promoted_at.desc())
+                    .limit(1)
+                )).scalars().first()
+                if row and row.prompt_template:
+                    return row.prompt_template, row.variant_name
+        except Exception:
+            pass
+        return None, None
+

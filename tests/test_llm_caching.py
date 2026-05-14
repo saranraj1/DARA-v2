@@ -9,9 +9,11 @@ Covers:
   - TTL: cache_ttl param overrides settings default
 """
 import sys
+
 sys.path.insert(0, ".")
 
 from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
 
 

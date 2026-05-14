@@ -1,7 +1,10 @@
 """DARA - Celery worker app with Redis broker"""
 from __future__ import annotations
+
 import logging
+
 from celery import Celery
+
 from config.settings import get_settings
 
 logger = logging.getLogger(__name__)

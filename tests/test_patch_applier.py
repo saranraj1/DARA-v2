@@ -2,9 +2,13 @@
 Unit tests: patch/applier.py (Week 6)
 Tests patch application to temp directory in safe mode.
 """
-import sys, difflib, tempfile, os
+import difflib
+import sys
+import tempfile
 from pathlib import Path
+
 import pytest
+
 sys.path.insert(0, ".")
 
 
@@ -47,7 +51,6 @@ class TestPatchApplier:
 
     @pytest.mark.asyncio
     async def test_empty_patches_returns_failure(self, applier):
-        from patch.applier import PatchApplier
         result = await applier.apply([])
         assert not result.success
         assert result.error is not None
@@ -99,7 +102,7 @@ class TestPatchApplier:
 
     @pytest.mark.asyncio
     async def test_validate_safe_code_passes(self, applier):
-        import tempfile, shutil
+        import shutil
         td = Path(tempfile.mkdtemp())
         (td / "safe.py").write_text("def add(a, b):\n    return a + b\n")
         passed, findings = applier._validate(td, ["safe.py"])
@@ -108,7 +111,7 @@ class TestPatchApplier:
 
     @pytest.mark.asyncio
     async def test_validate_syntax_error_fails(self, applier):
-        import tempfile, shutil
+        import shutil
         td = Path(tempfile.mkdtemp())
         (td / "broken.py").write_text("def broken(\n    pass\n")
         passed, findings = applier._validate(td, ["broken.py"])
@@ -118,8 +121,9 @@ class TestPatchApplier:
 
     @pytest.mark.asyncio
     async def test_get_patched_content(self, applier):
+        import shutil
+
         from patch.applier import PatchResult
-        import tempfile, shutil
         td = Path(tempfile.mkdtemp())
         (td / "out.py").write_text("x = 42\n")
         res = PatchResult(success=True, temp_dir=str(td), files_modified=["out.py"],

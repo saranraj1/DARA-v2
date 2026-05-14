@@ -10,16 +10,17 @@ Covers:
 Tests use FastAPI TestClient with mock Redis.
 """
 import sys
+
 sys.path.insert(0, ".")
 
 from unittest.mock import AsyncMock, MagicMock, patch
-import pytest
 
 
 class TestRateLimitMiddleware:
 
     def _app(self):
         from fastapi import FastAPI
+
         from api.middleware.rate_limit import RateLimitMiddleware
         app = FastAPI()
         app.add_middleware(RateLimitMiddleware)
@@ -50,8 +51,9 @@ class TestRateLimitMiddleware:
         assert r.status_code == 200
 
     def test_rate_limit_exceeded_returns_429(self):
+        from unittest.mock import AsyncMock, patch
+
         from fastapi.testclient import TestClient
-        from unittest.mock import patch, AsyncMock
 
         # Mock Redis to return count > limit immediately
         mock_redis = AsyncMock()
@@ -87,8 +89,10 @@ class TestRateLimitMiddleware:
     def test_check_and_increment_uses_pipeline(self):
         """Unit test: _check_and_increment returns the INCR result."""
         import asyncio
-        from api.middleware.rate_limit import RateLimitMiddleware
+
         from fastapi import FastAPI
+
+        from api.middleware.rate_limit import RateLimitMiddleware
         mw = RateLimitMiddleware(app=FastAPI())
 
         mock_pipeline = MagicMock()

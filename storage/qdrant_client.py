@@ -7,7 +7,6 @@ Manages two collections:
 from __future__ import annotations
 
 import logging
-import uuid
 from typing import Any
 
 from qdrant_client import AsyncQdrantClient
@@ -183,6 +182,18 @@ class QdrantStore:
         await self._client.set_payload(
             collection_name=ERROR_COLLECTION,
             payload={"outcome": outcome},
+            points=[error_id],
+        )
+
+    async def set_payload_fields(self, error_id: str, fields: dict) -> None:
+        """
+        Update arbitrary payload fields on an error embedding.
+        Used by RLHF feedback processor to set:
+          outcome, reliability_score, human_merged, human_rejected, human_feedback, fix_id
+        """
+        await self._client.set_payload(
+            collection_name=ERROR_COLLECTION,
+            payload=fields,
             points=[error_id],
         )
 

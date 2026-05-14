@@ -1,5 +1,7 @@
 from __future__ import annotations
+
 import logging
+
 from config.settings import get_settings
 
 logger = logging.getLogger(__name__)

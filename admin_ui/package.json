@@ -1,0 +1,26 @@
+{
+  "name": "dara-admin-ui",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "DARA Admin Dashboard — real-time visibility into the AI debugging pipeline",
+  "scripts": {
+    "dev": "vite --port 5173",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^6.23.1",
+    "recharts": "^2.12.7",
+    "lucide-react": "^0.396.0",
+    "clsx": "^2.1.1"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^4.3.1",
+    "vite": "^5.3.1"
+  }
+}

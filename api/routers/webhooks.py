@@ -12,8 +12,8 @@ import logging
 from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Request, status
 
 from config.settings import get_settings
-from ingestion.normalizer import ErrorNormalizer
 from ingestion.classifier import ErrorClassifier
+from ingestion.normalizer import ErrorNormalizer
 from ingestion.sources.github import GitHubSourceParser
 from storage.postgres import get_postgres
 from storage.redis_client import get_redis
@@ -50,7 +50,22 @@ async def github_webhook(
         )
         raise HTTPException(status_code=401, detail="Invalid webhook signature")
 
-    payload = json.loads(body)
+    # Handle ping immediately — body may be empty on some GitHub ping redeliveries
+    if x_github_event == "ping":
+        logger.info("GitHub ping received — webhook connected successfully")
+        return {"status": "pong"}
+
+    # Parse JSON body for all other event types
+    if not body:
+        logger.warning("GitHub webhook received empty body for event=%s", x_github_event)
+        return {"status": "ignored", "reason": "Empty body"}
+
+    try:
+        payload = json.loads(body)
+    except json.JSONDecodeError as exc:
+        logger.error("GitHub webhook JSON decode failed: %s", exc)
+        raise HTTPException(status_code=400, detail="Invalid JSON payload")
+
     logger.info("GitHub webhook received", extra={"event": x_github_event})
 
     # Route by event type
@@ -59,8 +74,6 @@ async def github_webhook(
         raw_error = _gh_parser.parse_workflow_run(payload)
     elif x_github_event == "push":
         raw_error = _gh_parser.parse_push_event(payload)
-    elif x_github_event == "ping":
-        return {"status": "pong"}
 
     if raw_error is None:
         return {"status": "ignored", "reason": "Non-failure event or succeeded"}
@@ -164,15 +177,15 @@ async def _run_approve_pipeline(
     Full approval pipeline:
     load fix → apply patch (temp dir) → git commit → github PR → record pattern → notify
     """
-    from patch.applier import PatchApplier
-    from patch.git_committer import GitCommitter
-    from output.github_pr import GitHubPRCreator
-    from output.slack_notifier import SlackNotifier
     from agents.memory import PatternMemory
     from config.llm_router import get_llm_router
-    from storage.redis_client import get_redis
-    from storage.audit import get_audit_logger
     from monitoring import metrics
+    from output.github_pr import GitHubPRCreator
+    from output.slack_notifier import SlackNotifier
+    from patch.applier import PatchApplier
+    from patch.git_committer import GitCommitter
+    from storage.audit import get_audit_logger
+    from storage.redis_client import get_redis
 
     postgres = get_postgres()
     notifier = SlackNotifier()
@@ -193,7 +206,7 @@ async def _run_approve_pipeline(
         )
 
         # 2. Reconstruct PatchFile objects from DB patch data
-        from api.models.agent_schemas import Fix, PatchFile
+        from api.models.agent_schemas import PatchFile
         patches_data = fix_row.get("patches", []) or []
         patch_objects = [
             PatchFile(
@@ -299,12 +312,12 @@ async def _run_reject_pipeline(
     fix_id: str, slack_user: str, reason: str, response_url: str
 ) -> None:
     """Reject pipeline: update DB, record failure pattern, notify Slack."""
-    from output.slack_notifier import SlackNotifier
     from agents.memory import PatternMemory
     from config.llm_router import get_llm_router
-    from storage.redis_client import get_redis
-    from storage.audit import get_audit_logger
     from monitoring import metrics
+    from output.slack_notifier import SlackNotifier
+    from storage.audit import get_audit_logger
+    from storage.redis_client import get_redis
 
     postgres = get_postgres()
     notifier = SlackNotifier()

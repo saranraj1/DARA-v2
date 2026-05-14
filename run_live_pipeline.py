@@ -3,18 +3,21 @@ Live end-to-end pipeline test for Week 4.
 Uses real Groq LLM. Tests: DebuggerAgent -> FixerAgent -> ReviewerAgent
 No database writes - pure in-memory test.
 """
-import sys, asyncio, time
+import asyncio
+import sys
+import time
+
 sys.path.insert(0, ".")
 
 async def main():
     print("=== DARA Live Pipeline Test (Week 4) ===\n")
 
-    from config.llm_router import get_llm_router
-    from storage.redis_client import get_redis
-    from context.builder import ContextBundle
     from agents.debugger import DebuggerAgent
     from agents.fixer import FixerAgent
     from agents.reviewer import ReviewerAgent
+    from config.llm_router import get_llm_router
+    from context.builder import ContextBundle
+    from storage.redis_client import get_redis
 
     # Use real LLM router
     redis = get_redis()

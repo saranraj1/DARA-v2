@@ -113,8 +113,45 @@ pattern_library_size = Gauge(
 
 # -- Rate Limiting (Week 10-11) -------
 from prometheus_client import Counter as _Counter
+
 rate_limit_hits = _Counter(
     'dara_rate_limit_hits_total',
     'Number of requests rejected by rate limiter',
     ['key_type'],
+)
+
+# -- Phase 3: Reflexive Memory Metrics (Week 15-20) ----------
+strategy_failures = Counter(
+    'dara_strategy_failures_total',
+    'Error class fixed by a strategy that keeps failing',
+    ['error_class', 'strategy'],
+)
+
+ab_test_promotions = Counter(
+    'dara_ab_test_promotions_total',
+    'Number of A/B test winners promoted to active',
+    ['error_class'],
+)
+
+memory_graph_nodes = Gauge(
+    'dara_memory_graph_nodes',
+    'Count of nodes in the Neo4j institutional memory graph',
+    ['node_type'],
+)
+
+anomaly_score = Gauge(
+    'dara_anomaly_score',
+    'Current Z-score anomaly level per service and metric',
+    ['service', 'metric'],
+)
+
+anomalies_detected = Counter(
+    'dara_anomalies_detected_total',
+    'Proactive anomalies detected by AnomalyDetector',
+    ['service', 'alert_type'],
+)
+
+fine_tuning_triples = Counter(
+    'dara_fine_tuning_triples_total',
+    'Training triples exported to MinIO',
 )

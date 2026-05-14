@@ -1,6 +1,8 @@
 """DARA - Git blame + commit history analyzer"""
 from __future__ import annotations
-import logging, subprocess
+
+import logging
+import subprocess
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 

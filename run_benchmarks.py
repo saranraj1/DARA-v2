@@ -1,10 +1,13 @@
-﻿import sys, time
+﻿import sys
+import time
+
 sys.path.insert(0, '.')
 
 print('=== DARA Week 3 Benchmarks ===')
 
 # B1: AST Chunker on a real file
 from context.ast_chunker import ASTChunker
+
 chunker = ASTChunker()
 t0 = time.perf_counter()
 chunks = chunker.chunk_file('storage/postgres.py')
@@ -17,6 +20,7 @@ print('B1 PASS: boundary extraction correct')
 
 # B2: Token counter
 from context.retriever import count_tokens
+
 t = count_tokens('def my_function(x, y): return x + y')
 print(f'B2 Token counter: {t} tokens, PASS')
 assert t > 0
@@ -29,6 +33,7 @@ print('B3 PASS')
 
 # B4: Git analyzer
 from context.git_analyzer import GitAnalyzer
+
 git = GitAnalyzer('.')
 t0 = time.perf_counter()
 commits = git.get_recent_commits(days=30, max_commits=5)
@@ -38,6 +43,7 @@ assert ms < 3000, f'Too slow: {ms}ms'
 
 # B5: ContextBundle dataclass
 from context.builder import ContextBundle
+
 b = ContextBundle(error_id='abc123def456', erroring_file='app.py',
                   erroring_function='get_user', erroring_code='def get_user(): pass',
                   total_tokens=120)
@@ -48,7 +54,7 @@ print('B5 PASS')
 
 # B6: Celery tasks importable
 from workers.main import celery_app
-from workers.tasks import analyze_error, index_repository
+
 print(f'B6 Celery: app={celery_app.main}, tasks=analyze_error+index_repository, PASS')
 
 print()

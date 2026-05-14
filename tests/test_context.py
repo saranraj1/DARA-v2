@@ -1,10 +1,14 @@
 ﻿"""Unit tests: context builder pipeline"""
-import pytest, sys
+import sys
+
+import pytest
+
 sys.path.insert(0,".")
 
-from context.ast_chunker import ASTChunker, CodeChunk
+from context.ast_chunker import ASTChunker
 from context.git_analyzer import GitAnalyzer
 from context.retriever import count_tokens
+
 
 class TestASTChunker:
     @pytest.fixture

@@ -4,7 +4,10 @@ Tests every component from ingestion through to orchestrator output.
 No database/Redis required for stages 1-8 (mocked).
 Stages 9-12 require real DB (skipped gracefully if not available).
 """
-import sys, asyncio, time
+import asyncio
+import sys
+import time
+
 sys.path.insert(0, ".")
 
 print("=" * 60)
@@ -15,21 +18,21 @@ results = {}
 # ── T1: All packages importable ─────────────────────────────
 print("\nT1: Package imports...")
 try:
-    from context.ast_chunker import ASTChunker, CodeChunk
-    from context.git_analyzer import GitAnalyzer
-    from context.retriever import ContextRetriever, count_tokens
-    from context.builder import ContextBuilder, ContextBundle
     from agents.debugger import DebuggerAgent
     from agents.fixer import FixerAgent
-    from agents.reviewer import ReviewerAgent
     from agents.memory import PatternMemory
     from agents.orchestrator import Orchestrator, PipelineResult
+    from agents.reviewer import ReviewerAgent
+    from api.models.agent_schemas import Fix, PatchFile, ReviewResult, RootCauseResult
+    from context.ast_chunker import ASTChunker, CodeChunk
+    from context.builder import ContextBuilder, ContextBundle
+    from context.git_analyzer import GitAnalyzer
+    from context.retriever import ContextRetriever, count_tokens
+    from output.github_pr import GitHubPRCreator
+    from output.slack_notifier import SlackNotifier
     from validation.engine import ValidationEngine
     from validation.static_analyzer import StaticAnalyzer
     from validation.test_runner import TestRunner
-    from output.slack_notifier import SlackNotifier
-    from output.github_pr import GitHubPRCreator
-    from api.models.agent_schemas import RootCauseResult, Fix, PatchFile, ReviewResult
     from workers.main import celery_app
     from workers.tasks import analyze_error, index_repository
     results["T1"] = "PASS"

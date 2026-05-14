@@ -10,10 +10,12 @@ Covers:
   - BlameResult.summary includes author and confidence
 """
 import sys
+
 sys.path.insert(0, ".")
 
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock
+
 import pytest
 
 

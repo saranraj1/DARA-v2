@@ -1,8 +1,39 @@
 from __future__ import annotations
+
+import asyncio
 import logging
+import threading
+
 from api.models.agent_schemas import Fix, RootCauseResult
 
 logger = logging.getLogger(__name__)
+
+
+def _schedule_consolidation(coro) -> None:
+    """
+    FLAW-4 fix: safe fire-and-forget for both async (FastAPI) and
+    sync (Celery) execution contexts.
+
+    In an async context (FastAPI request handler): create_task() onto the
+    running event loop — zero overhead, non-blocking.
+
+    In a sync/thread context (Celery worker, pytest): spawn a daemon thread
+    that wraps asyncio.run() so the coroutine still executes without
+    raising RuntimeError: no running event loop.
+    """
+    try:
+        loop = asyncio.get_running_loop()
+        # We ARE inside an async context — schedule on current loop
+        loop.create_task(coro)
+    except RuntimeError:
+        # No running loop (Celery worker / sync code) — run in a daemon thread
+        def _run_in_thread():
+            try:
+                asyncio.run(coro)
+            except Exception as e:
+                logger.debug("_schedule_consolidation thread: %s", e)
+        t = threading.Thread(target=_run_in_thread, daemon=True)
+        t.start()
 
 
 class PatternMemory:
@@ -80,6 +111,26 @@ class PatternMemory:
                 "example_fix": example,
             })
             logger.info("PatternMemory: stored success pattern for %s (fix_id=%s)", ec, fix_id)
+
+            # Phase 3: fire-and-forget into Neo4j institutional memory graph
+            # FLAW-4 fix: _schedule_consolidation is safe in both async (FastAPI)
+            # and sync (Celery) execution contexts — no RuntimeError possible.
+            try:
+                from agents.memory_consolidation import get_consolidation_agent
+                consolidation = get_consolidation_agent(
+                    neo4j=getattr(self, '_neo4j', None),
+                    postgres=self._pg,
+                )
+                _schedule_consolidation(
+                    consolidation.on_fix_accepted(
+                        error=error or {"error_class": ec, "service": svc},
+                        fix=fix,
+                        root_cause=root_cause,
+                        bundle=None,
+                    )
+                )
+            except Exception as e:
+                logger.debug("PatternMemory: consolidation schedule failed: %s", e)
         except Exception as e:
             logger.warning("PatternMemory.record_success: %s", e)
 
@@ -107,5 +158,21 @@ class PatternMemory:
                 "PatternMemory: recorded failure for %s (fix_id=%s) reason=%s",
                 error_class, fix_id, failure_reason[:80],
             )
+
+            # Phase 3: fire-and-forget rejection into Neo4j memory graph
+            # FLAW-4 fix: same safe scheduling as record_success
+            try:
+                from agents.memory_consolidation import get_consolidation_agent
+                consolidation = get_consolidation_agent(postgres=self._pg)
+                _schedule_consolidation(
+                    consolidation.on_fix_rejected(
+                        error={"error_class": error_class},
+                        fix=None,
+                        root_cause=None,
+                        reason=failure_reason,
+                    )
+                )
+            except Exception as e:
+                logger.debug("PatternMemory: consolidation rejection schedule failed: %s", e)
         except Exception as e:
             logger.warning("PatternMemory.record_failure: %s", e)

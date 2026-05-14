@@ -2,7 +2,6 @@
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
-from storage.postgres import get_postgres
 from storage.redis_client import get_redis
 
 router = APIRouter()

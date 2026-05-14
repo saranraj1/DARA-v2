@@ -11,7 +11,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import AsyncGenerator
 
-from sqlalchemy import or_, select, update
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -20,7 +20,7 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from config.settings import get_settings
-from storage.models import AuditLog, Base, Error, Fix, PatternLibrary, PipelineRun
+from storage.models import AuditLog, Error, Fix, PatternLibrary, PipelineRun
 
 logger = logging.getLogger(__name__)
 
@@ -351,8 +351,9 @@ class PostgresClient:
 
     async def save_span(self, span) -> str:
         """Persist a NormalisedSpan to distributed_traces. Returns UUID."""
-        from storage.models import DistributedTrace
         import uuid as _uuid
+
+        from storage.models import DistributedTrace
         async with self.session() as sess:
             row = DistributedTrace(
                 id=_uuid.uuid4(),
@@ -374,8 +375,9 @@ class PostgresClient:
 
     async def get_trace(self, trace_id: str) -> list[dict]:
         """Return all spans for a trace_id, ordered by start time."""
-        from storage.models import DistributedTrace
         from sqlalchemy import select
+
+        from storage.models import DistributedTrace
         async with self.session() as sess:
             rows = (
                 await sess.execute(
@@ -405,8 +407,10 @@ class PostgresClient:
         self, service: str | None = None, error_only: bool = False, limit: int = 50
     ) -> list[dict]:
         """List distinct traces with summary info."""
+        from sqlalchemy import Integer, distinct, func, select
+
+
         from storage.models import DistributedTrace
-        from sqlalchemy import select, func, distinct
         async with self.session() as sess:
             q = (
                 select(
@@ -449,10 +453,12 @@ class PostgresClient:
         avg_latency_ms: float | None,
     ) -> None:
         """Upsert a service→service call edge in service_topology."""
-        from sqlalchemy.dialects.postgresql import insert as pg_insert
-        from storage.models import ServiceTopology
         import uuid as _uuid
         from datetime import datetime, timezone
+
+        from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+        from storage.models import ServiceTopology
         stmt = pg_insert(ServiceTopology).values(
             id=_uuid.uuid4(),
             source_service=source,
@@ -475,8 +481,9 @@ class PostgresClient:
 
     async def get_topology(self) -> list[dict]:
         """Return all service topology edges ordered by call count desc."""
-        from storage.models import ServiceTopology
         from sqlalchemy import select
+
+        from storage.models import ServiceTopology
         async with self.session() as sess:
             rows = (
                 await sess.execute(
@@ -498,10 +505,12 @@ class PostgresClient:
                 for r in rows
             ]
 
+
     async def save_deploy_event(self, event: dict) -> str:
         """Save a CI/CD deploy event for blame attribution."""
-        from storage.models import DeployEvent
         import uuid as _uuid
+
+        from storage.models import DeployEvent
         async with self.session() as sess:
             row = DeployEvent(
                 id=_uuid.uuid4(),
@@ -521,8 +530,9 @@ class PostgresClient:
         self, service_name: str, before: datetime
     ) -> dict | None:
         """Find the most recent deploy for a service before a given timestamp."""
-        from storage.models import DeployEvent
         from sqlalchemy import select
+
+        from storage.models import DeployEvent
         async with self.session() as sess:
             row = (
                 await sess.execute(

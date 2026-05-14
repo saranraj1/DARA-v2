@@ -1,8 +1,12 @@
 """Unit tests: ingestion pipeline"""
-import pytest, asyncio, sys
+import sys
+
+import pytest
+
 sys.path.insert(0, ".")
-from ingestion.normalizer import ErrorNormalizer
 from ingestion.classifier import ErrorClassifier
+from ingestion.normalizer import ErrorNormalizer
+
 
 @pytest.fixture
 def normalizer(): return ErrorNormalizer()

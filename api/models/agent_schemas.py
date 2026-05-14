@@ -1,9 +1,12 @@
 """DARA — Agent pipeline Pydantic schemas."""
 from __future__ import annotations
 
-from typing import Literal
+from typing import TYPE_CHECKING, Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
+
+if TYPE_CHECKING:
+    from validation.security_auditor import SecurityAuditResult
 
 
 class CodeChunk(BaseModel):
@@ -66,6 +69,8 @@ class Fix(BaseModel):
 
 
 class ReviewResult(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
     quality_score: float = Field(..., ge=0.0, le=1.0)
     correctness_passes: bool
     security_passes: bool
@@ -73,3 +78,5 @@ class ReviewResult(BaseModel):
     rejection_reason: str | None
     reviewer_notes: str
     issues: list[str] = Field(default_factory=list)
+    # Attached by ReviewerAgent for orchestrator retry logic (optional)
+    security_audit: Any | None = Field(default=None, exclude=True)

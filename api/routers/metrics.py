@@ -1,6 +1,7 @@
 """DARA — Metrics router: Prometheus scrape endpoint + JSON summary for Grafana."""
 from fastapi import APIRouter, Response
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
+
 from storage.postgres import get_postgres
 
 router = APIRouter()

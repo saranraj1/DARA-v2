@@ -1,7 +1,10 @@
 """DARA - Semantic code retriever with composite re-ranking and token budget"""
 from __future__ import annotations
+
 import logging
+
 import tiktoken
+
 from config.settings import get_settings
 from storage.qdrant_client import QdrantStore
 

@@ -2,9 +2,11 @@
 Unit tests: monitoring/metrics.py + api/routers/admin.py + api/routers/metrics.py (Week 8)
 """
 import sys
+
 sys.path.insert(0, ".")
 
 from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
 
 
@@ -71,8 +73,9 @@ class TestMetricsRouter:
 
     @pytest.mark.asyncio
     async def test_metrics_endpoint_returns_prometheus_text(self):
-        from fastapi.testclient import TestClient
         from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+
         from api.routers.metrics import router
         app = FastAPI()
         app.include_router(router, prefix="/api/v1")
@@ -84,8 +87,9 @@ class TestMetricsRouter:
 
     @pytest.mark.asyncio
     async def test_metrics_summary_returns_json(self):
-        from fastapi.testclient import TestClient
         from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+
         from api.routers.metrics import router
         with patch("api.routers.metrics.get_postgres") as mock_get:
             mock_pg = MagicMock()
@@ -110,6 +114,7 @@ class TestAdminAPI:
 
     def _make_app(self):
         from fastapi import FastAPI
+
         from api.routers.admin import router
         app = FastAPI()
         app.include_router(router)

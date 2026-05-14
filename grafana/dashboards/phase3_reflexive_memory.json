@@ -1,0 +1,210 @@
+{
+  "__inputs": [],
+  "__requires": [
+    {"type": "grafana", "id": "grafana", "name": "Grafana", "version": "10.4.0"},
+    {"type": "datasource", "id": "prometheus", "name": "Prometheus", "version": "1.0.0"},
+    {"type": "panel", "id": "timeseries", "name": "Time series", "version": ""},
+    {"type": "panel", "id": "stat", "name": "Stat", "version": ""},
+    {"type": "panel", "id": "gauge", "name": "Gauge", "version": ""},
+    {"type": "panel", "id": "table", "name": "Table", "version": ""}
+  ],
+  "annotations": {"list": []},
+  "description": "DARA Phase 3 — Reflexive Memory: Strategy health, A/B tests, anomaly detection",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "collapsed": false,
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 0},
+      "id": 100,
+      "title": "🧠 Strategy Health",
+      "type": "row"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "thresholds"},
+          "thresholds": {"steps": [
+            {"color": "green", "value": null},
+            {"color": "yellow", "value": 0.3},
+            {"color": "red", "value": 0.5}
+          ]},
+          "unit": "percentunit",
+          "mappings": []
+        }
+      },
+      "gridPos": {"h": 4, "w": 4, "x": 0, "y": 1},
+      "id": 1,
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "orientation": "auto", "textMode": "auto", "colorMode": "background"},
+      "title": "Strategy Failure Rate",
+      "type": "stat",
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "sum(rate(dara_strategy_failures_total[5m])) / sum(rate(dara_fixes_generated_total[5m]))", "legendFormat": "Failure Rate", "refId": "A"}]
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "thresholds"},
+          "thresholds": {"steps": [
+            {"color": "red", "value": null},
+            {"color": "yellow", "value": 1},
+            {"color": "green", "value": 5}
+          ]},
+          "unit": "short",
+          "mappings": []
+        }
+      },
+      "gridPos": {"h": 4, "w": 4, "x": 4, "y": 1},
+      "id": 2,
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "orientation": "auto", "textMode": "auto", "colorMode": "background"},
+      "title": "A/B Promotions (24h)",
+      "type": "stat",
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "increase(dara_ab_test_promotions_total[24h])", "legendFormat": "Promotions", "refId": "A"}]
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "thresholds"},
+          "thresholds": {"steps": [
+            {"color": "green", "value": null},
+            {"color": "yellow", "value": 100},
+            {"color": "red", "value": 1000}
+          ]},
+          "unit": "short",
+          "mappings": []
+        }
+      },
+      "gridPos": {"h": 4, "w": 4, "x": 8, "y": 1},
+      "id": 3,
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "orientation": "auto", "textMode": "auto", "colorMode": "background"},
+      "title": "Memory Graph Nodes",
+      "type": "stat",
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "sum(dara_memory_graph_nodes)", "legendFormat": "Total Nodes", "refId": "A"}]
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {
+        "defaults": {"color": {"mode": "palette-classic"}, "custom": {"lineWidth": 2, "fillOpacity": 10}, "unit": "short"}
+      },
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 5},
+      "id": 4,
+      "options": {"tooltip": {"mode": "multi"}, "legend": {"displayMode": "table", "placement": "bottom"}},
+      "title": "Strategy Failures by Error Class (5m rate)",
+      "type": "timeseries",
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "sum by(error_class) (rate(dara_strategy_failures_total[5m]))", "legendFormat": "{{error_class}}", "refId": "A"}]
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {
+        "defaults": {"color": {"mode": "palette-classic"}, "custom": {"lineWidth": 2, "fillOpacity": 10}, "unit": "short"}
+      },
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 5},
+      "id": 5,
+      "options": {"tooltip": {"mode": "multi"}, "legend": {"displayMode": "table", "placement": "bottom"}},
+      "title": "A/B Test Promotions by Error Class",
+      "type": "timeseries",
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "sum by(error_class) (increase(dara_ab_test_promotions_total[1h]))", "legendFormat": "{{error_class}}", "refId": "A"}]
+    },
+    {
+      "collapsed": false,
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 13},
+      "id": 200,
+      "title": "🚨 Anomaly Detection",
+      "type": "row"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "thresholds"},
+          "thresholds": {"steps": [
+            {"color": "green", "value": null},
+            {"color": "yellow", "value": 1},
+            {"color": "red", "value": 5}
+          ]},
+          "unit": "short",
+          "mappings": []
+        }
+      },
+      "gridPos": {"h": 4, "w": 6, "x": 0, "y": 14},
+      "id": 6,
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "orientation": "auto", "textMode": "auto", "colorMode": "background"},
+      "title": "Active Anomaly Alerts",
+      "type": "stat",
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "sum(increase(dara_anomalies_detected_total[10m]))", "legendFormat": "Alerts", "refId": "A"}]
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {
+        "defaults": {"color": {"mode": "palette-classic"}, "custom": {"lineWidth": 2, "fillOpacity": 15}, "unit": "none"}
+      },
+      "gridPos": {"h": 8, "w": 18, "x": 6, "y": 14},
+      "id": 7,
+      "options": {"tooltip": {"mode": "multi"}, "legend": {"displayMode": "table", "placement": "right"}},
+      "title": "Anomaly Score by Service (Z-score, threshold=3.0)",
+      "type": "timeseries",
+      "targets": [
+        {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "dara_anomaly_score", "legendFormat": "{{service}} {{metric}}", "refId": "A"},
+        {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "3", "legendFormat": "🔴 Z=3.0 threshold", "refId": "B"}
+      ]
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {
+        "defaults": {"color": {"mode": "palette-classic"}, "custom": {"lineWidth": 2, "fillOpacity": 10}, "unit": "short"}
+      },
+      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 22},
+      "id": 8,
+      "options": {"tooltip": {"mode": "multi"}, "legend": {"displayMode": "table", "placement": "bottom"}},
+      "title": "Anomalies Detected over Time (by type)",
+      "type": "timeseries",
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "sum by(metric_name) (rate(dara_anomalies_detected_total[5m]))", "legendFormat": "{{metric_name}}", "refId": "A"}]
+    },
+    {
+      "collapsed": false,
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 30},
+      "id": 300,
+      "title": "📦 Fine-Tuning Export",
+      "type": "row"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {
+        "defaults": {"color": {"mode": "thresholds"}, "thresholds": {"steps": [{"color": "blue", "value": null}]}, "unit": "short"}
+      },
+      "gridPos": {"h": 4, "w": 6, "x": 0, "y": 31},
+      "id": 9,
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "orientation": "auto", "textMode": "auto", "colorMode": "background"},
+      "title": "Total Training Triples Exported",
+      "type": "stat",
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "sum(dara_fine_tuning_triples_exported_total)", "legendFormat": "Triples", "refId": "A"}]
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {
+        "defaults": {"color": {"mode": "palette-classic"}, "custom": {"lineWidth": 2, "fillOpacity": 10}, "unit": "short"}
+      },
+      "gridPos": {"h": 8, "w": 18, "x": 6, "y": 31},
+      "id": 10,
+      "options": {"tooltip": {"mode": "multi"}, "legend": {"displayMode": "table", "placement": "bottom"}},
+      "title": "Fine-Tuning Triples Exported Over Time",
+      "type": "timeseries",
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "sum(rate(dara_fine_tuning_triples_exported_total[1h]))", "legendFormat": "Triples/hr", "refId": "A"}]
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "tags": ["dara", "phase3", "reflexive-memory"],
+  "templating": {"list": []},
+  "time": {"from": "now-6h", "to": "now"},
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "DARA — Phase 3 Reflexive Memory",
+  "uid": "dara-phase3-reflexive",
+  "version": 1
+}

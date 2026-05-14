@@ -3,7 +3,11 @@ DARA Phase 1 Demo - No Docker Required
 Shows the FULL pipeline output: Ingest -> Normalize -> Classify -> AST -> Debug -> Fix -> Review
 Uses real Groq LLM. Skips DB/Redis/Qdrant (in-memory only).
 """
-import sys, asyncio, time, json, textwrap
+import asyncio
+import sys
+import textwrap
+import time
+
 sys.path.insert(0, ".")
 
 # -- Pretty printing helpers -----------------------------------
@@ -188,8 +192,8 @@ async def main():
     # ---------------------------------------------------------
     section("STAGE 6: DebuggerAgent  (Groq llama-3.3-70b-versatile  temp=0.1)")
 
-    from config.llm_router import get_llm_router
     from agents.debugger import DebuggerAgent
+    from config.llm_router import get_llm_router
 
     llm = get_llm_router()
     debugger = DebuggerAgent(llm_router=llm)

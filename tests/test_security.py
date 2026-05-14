@@ -8,12 +8,14 @@ Covers:
   - Rate limit header validation
 """
 import sys
+
 sys.path.insert(0, ".")
 
-import time
-import hmac
 import hashlib
+import hmac
+import time
 from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
 
 
@@ -149,6 +151,7 @@ class TestAdminTokenSecurity:
 
     def _app(self):
         from fastapi import FastAPI
+
         from api.routers.admin import router
         app = FastAPI()
         app.include_router(router)

@@ -1,9 +1,13 @@
 from __future__ import annotations
-import json, logging, re
+
+import json
+import logging
+import re
 from pathlib import Path
+
+from api.models.agent_schemas import RootCauseResult
 from context.builder import ContextBundle
 from context.retriever import count_tokens
-from api.models.agent_schemas import RootCauseResult
 
 logger = logging.getLogger(__name__)
 PROMPT_PATH = Path("prompts/root_cause_v1.txt")

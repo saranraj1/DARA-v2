@@ -3,7 +3,11 @@ DARA Phase 1 End-to-End Test with Real Docker Stack
 Requires: docker-compose.dev.yml services running (postgres, redis, qdrant)
 Run: python run_e2e.py
 """
-import sys, asyncio, time, uuid
+import asyncio
+import sys
+import time
+import uuid
+
 sys.path.insert(0, ".")
 
 async def main():
@@ -15,10 +19,10 @@ async def main():
     # -- E1: Infrastructure health checks ----------------------
     print("\nE1: Infrastructure health checks...")
     try:
-        from storage.postgres import get_postgres
-        from storage.redis_client import get_redis
-        from storage.qdrant_client import get_qdrant
         from config.llm_router import get_llm_router
+        from storage.postgres import get_postgres
+        from storage.qdrant_client import get_qdrant
+        from storage.redis_client import get_redis
 
         postgres = get_postgres()
         redis = get_redis()
@@ -48,9 +52,9 @@ async def main():
     print("\nE2: Error ingestion to Postgres...")
     error_id = None
     try:
-        from ingestion.normalizer import ErrorNormalizer
         from ingestion.classifier import ErrorClassifier
         from ingestion.deduplicator import ErrorDeduplicator
+        from ingestion.normalizer import ErrorNormalizer
         normalizer = ErrorNormalizer()
         classifier = ErrorClassifier()
         deduper = ErrorDeduplicator()

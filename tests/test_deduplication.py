@@ -2,10 +2,11 @@
 Unit tests: ingestion/deduplicator.py + workers maintenance tasks (Week 7)
 """
 import sys
+
 sys.path.insert(0, ".")
 
-import hashlib
 from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
 
 

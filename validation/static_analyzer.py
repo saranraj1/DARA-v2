@@ -1,5 +1,10 @@
 from __future__ import annotations
-import json, logging, shutil, subprocess, tempfile
+
+import json
+import logging
+import shutil
+import subprocess
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -44,7 +49,18 @@ class StaticAnalyzer:
         import time
         t0 = time.perf_counter()
 
-        # Write patched content to temp file
+        # Security: validate file_path doesn't contain path traversal sequences
+        # (file_path is stored in our DB — defense in depth against malformed data)
+        if file_path:
+            resolved = Path(file_path).resolve()
+            # Reject paths that try to escape to system dirs
+            dangerous_roots = [Path("C:/Windows"), Path("/etc"), Path("/bin"), Path("/usr")]
+            if any(str(resolved).startswith(str(d)) for d in dangerous_roots):
+                logger.warning("StaticAnalyzer: suspicious file_path rejected: %s", file_path)
+                return StaticAnalysisResult(passed=False, tool="security_guard",
+                                             error_count=1, raw_output="Path traversal rejected")
+
+        # Write patched content to temp file (tmp_path is always a system-temp created path)
         with tempfile.NamedTemporaryFile(suffix=".py", mode="w", encoding="utf-8",
                                          delete=False, prefix="dara_patch_") as f:
             f.write(patched_content)

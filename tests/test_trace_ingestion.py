@@ -10,12 +10,11 @@ Covers:
   - Deploy event ingestion
 """
 import sys
+
 sys.path.insert(0, ".")
 
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
-import pytest
-
 
 # ── OTel Span Parser Tests ─────────────────────────────────────
 
@@ -222,14 +221,16 @@ class TestTracesRouter:
 
     def _app(self):
         from fastapi import FastAPI
+
         from api.routers.traces import router
         app = FastAPI()
         app.include_router(router, prefix="/api/v1")
         return app
 
     def test_ingest_simplified_spans_returns_202(self):
+        from unittest.mock import AsyncMock, patch
+
         from fastapi.testclient import TestClient
-        from unittest.mock import patch, AsyncMock
 
         mock_pg = MagicMock()
         mock_pg.save_span = AsyncMock(return_value="uuid-1")

@@ -1,11 +1,17 @@
 from __future__ import annotations
+
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
+
 from config.settings import get_settings
 from context.ast_chunker import ASTChunker, CodeChunk
 from context.git_analyzer import GitAnalyzer
 from context.retriever import ContextRetriever, count_tokens
+
+if TYPE_CHECKING:
+    from graph.blast_radius import BlastRadiusReport
 
 logger = logging.getLogger(__name__)
 
@@ -23,17 +29,22 @@ class ContextBundle:
     blame_info: dict | None = None
     total_tokens: int = 0
     trace_id: str | None = None
+    # Blast radius report injected by Orchestrator after fix generation
+    blast_radius: Any | None = None   # BlastRadiusReport | None
 
     def summary(self) -> str:
+        br = ""
+        if self.blast_radius:
+            br = f", blast_risk={self.blast_radius.risk_level}"
         return (
             f"ContextBundle[id={self.error_id[:8]}, file={self.erroring_file}, "
             f"chunks={len(self.related_functions)}, commits={len(self.recent_commits)}, "
-            f"tokens={self.total_tokens}]"
+            f"tokens={self.total_tokens}{br}]"
         )
 
 
 class ContextBuilder:
-    def __init__(self, retriever: ContextRetriever, repo_path: str):
+    def __init__(self, retriever: ContextRetriever, repo_path: str) -> None:
         self._retriever = retriever
         self._chunker = ASTChunker()
         self._git = GitAnalyzer(repo_path)

@@ -147,7 +147,7 @@ class Neo4jClient:
 
     async def get_full_topology(self) -> dict:
         """Return full service graph as {nodes, edges}."""
-        from graph.queries import GET_FULL_TOPOLOGY, GET_ALL_SERVICE_NODES
+        from graph.queries import GET_ALL_SERVICE_NODES, GET_FULL_TOPOLOGY
         edges = await self.execute_query(GET_FULL_TOPOLOGY)
         nodes = await self.execute_query(GET_ALL_SERVICE_NODES)
         return {"nodes": nodes, "edges": edges}
@@ -196,7 +196,7 @@ class Neo4jClient:
         error_message: str | None = None,
     ) -> None:
         """Persist or update a FailureCascade node. Also links to root Service."""
-        from graph.queries import STORE_FAILURE_CASCADE, LINK_CASCADE_TO_SERVICE
+        from graph.queries import LINK_CASCADE_TO_SERVICE, STORE_FAILURE_CASCADE
         await self.execute_write(
             STORE_FAILURE_CASCADE,
             {
@@ -267,6 +267,210 @@ class Neo4jClient:
             },
         )
 
+    # ─── Phase 3: Institutional Memory Graph ─────────────────
+
+    async def create_memory_indexes(self) -> None:
+        """Create Phase 3 Neo4j indexes for memory graph nodes."""
+        from graph.queries import MEMORY_GRAPH_INDEXES
+        for cypher in MEMORY_GRAPH_INDEXES:
+            try:
+                await self.execute_write(cypher)
+            except Exception as e:
+                logger.debug("Memory index creation skipped: %s", e)
+
+    async def upsert_error_pattern(
+        self,
+        signature_hash: str,
+        error_class: str,
+        confidence: float = 0.5,
+        strategy: str = "llm_single_file",
+    ) -> None:
+        """Merge an ErrorPattern node. Updates frequency and avg_confidence on match."""
+        from graph.queries import UPSERT_ERROR_PATTERN
+        await self.execute_write(
+            UPSERT_ERROR_PATTERN,
+            {
+                "signature_hash": signature_hash,
+                "error_class": error_class,
+                "confidence": confidence,
+                "strategy": strategy,
+            },
+        )
+
+    async def upsert_fix_template(
+        self,
+        template_id: str,
+        error_class: str,
+        strategy: str,
+        fix_body: str,
+    ) -> None:
+        """Merge a FixTemplate node — creates on first use, updates last_used on match."""
+        from graph.queries import UPSERT_FIX_TEMPLATE
+        await self.execute_write(
+            UPSERT_FIX_TEMPLATE,
+            {
+                "template_id": template_id,
+                "error_class": error_class,
+                "strategy": strategy,
+                "fix_body": fix_body[:2000],  # cap to 2KB in graph
+            },
+        )
+
+    async def update_fix_template_outcome(
+        self,
+        template_id: str,
+        accepted: int = 0,
+        rejected: int = 0,
+    ) -> None:
+        """Increment acceptance/rejection counters and recompute success_rate."""
+        from graph.queries import UPDATE_FIX_TEMPLATE_OUTCOME
+        await self.execute_write(
+            UPDATE_FIX_TEMPLATE_OUTCOME,
+            {"template_id": template_id, "accepted": accepted, "rejected": rejected},
+        )
+
+    async def link_fix_to_pattern(
+        self,
+        signature_hash: str,
+        template_id: str,
+        confidence: float,
+        outcome: str,
+        strategy_used: str,
+    ) -> None:
+        """Create or update RESOLVED_BY edge between ErrorPattern and FixTemplate."""
+        from graph.queries import LINK_FIX_TO_PATTERN
+        await self.execute_write(
+            LINK_FIX_TO_PATTERN,
+            {
+                "signature_hash": signature_hash,
+                "template_id": template_id,
+                "confidence": confidence,
+                "outcome": outcome,
+                "strategy_used": strategy_used,
+            },
+        )
+
+    async def increment_pattern_rejection(
+        self, signature_hash: str, threshold: float = 0.4
+    ) -> None:
+        """Increment rejection_count and flip needs_refresh if rate exceeds threshold."""
+        from graph.queries import INCREMENT_PATTERN_REJECTION
+        await self.execute_write(
+            INCREMENT_PATTERN_REJECTION,
+            {"signature_hash": signature_hash, "threshold": threshold},
+        )
+
+    async def increment_pattern_acceptance(self, signature_hash: str) -> None:
+        """Increment acceptance_count on an ErrorPattern."""
+        from graph.queries import INCREMENT_PATTERN_ACCEPTANCE
+        await self.execute_write(
+            INCREMENT_PATTERN_ACCEPTANCE,
+            {"signature_hash": signature_hash},
+        )
+
+    async def supersede_template(
+        self,
+        old_template_id: str,
+        new_template_id: str,
+        reason: str = "A/B test promotion",
+    ) -> None:
+        """Create SUPERSEDED_BY edge and update statuses (old→retired, new→active)."""
+        from graph.queries import SUPERSEDE_TEMPLATE
+        await self.execute_write(
+            SUPERSEDE_TEMPLATE,
+            {
+                "old_template_id": old_template_id,
+                "new_template_id": new_template_id,
+                "reason": reason,
+            },
+        )
+
+    async def upsert_code_pattern(
+        self,
+        ast_hash: str,
+        language: str,
+        pattern_type: str,
+        description: str,
+    ) -> None:
+        """Merge a CodePattern node (structural AST pattern reuse tracking)."""
+        from graph.queries import UPSERT_CODE_PATTERN
+        await self.execute_write(
+            UPSERT_CODE_PATTERN,
+            {
+                "ast_hash": ast_hash,
+                "language": language,
+                "pattern_type": pattern_type,
+                "description": description,
+            },
+        )
+
+    async def link_code_to_error(
+        self, ast_hash: str, signature_hash: str
+    ) -> None:
+        """Create ASSOCIATED_WITH edge between CodePattern and ErrorPattern."""
+        from graph.queries import LINK_CODE_TO_ERROR
+        await self.execute_write(
+            LINK_CODE_TO_ERROR,
+            {"ast_hash": ast_hash, "signature_hash": signature_hash},
+        )
+
+    async def get_best_template(
+        self,
+        error_class: str,
+        min_uses: int = 3,
+        min_success_rate: float = 0.6,
+    ) -> dict | None:
+        """
+        Return the highest success_rate FixTemplate for an error_class.
+        Excludes superseded (retired) templates.
+        Returns None if no qualifying template exists.
+        """
+        from graph.queries import GET_BEST_TEMPLATE
+        results = await self.execute_query(
+            GET_BEST_TEMPLATE,
+            {
+                "error_class": error_class,
+                "min_uses": min_uses,
+                "min_success_rate": min_success_rate,
+            },
+        )
+        return results[0] if results else None
+
+    async def get_failing_classes(
+        self,
+        threshold: float = 0.4,
+        min_samples: int = 5,
+    ) -> list[dict]:
+        """
+        Return error classes where rejection_rate >= threshold and samples >= min_samples.
+        Used by StrategyMonitor to identify which classes need new strategies.
+        """
+        from graph.queries import GET_FAILING_CLASSES
+        return await self.execute_query(
+            GET_FAILING_CLASSES,
+            {"threshold": threshold, "min_samples": min_samples},
+        )
+
+    async def get_graph_stats(self) -> dict:
+        """
+        Return node counts for all major node types.
+        Falls back to individual MATCH queries if APOC is not available.
+        """
+        try:
+            from graph.queries import GET_GRAPH_STATS_SIMPLE
+            rows = await self.execute_query(GET_GRAPH_STATS_SIMPLE)
+            if rows:
+                return rows[0]
+        except Exception as e:
+            logger.warning("Neo4j get_graph_stats failed: %s", e)
+        return {
+            "error_patterns": 0,
+            "fix_templates": 0,
+            "code_patterns": 0,
+            "services": 0,
+            "cascades": 0,
+        }
+
 
 _neo4j_instance: Neo4jClient | None = None
 
@@ -277,4 +481,5 @@ def get_neo4j() -> Neo4jClient:
         s = get_settings()
         _neo4j_instance = Neo4jClient(s.neo4j_uri, s.neo4j_user, s.neo4j_password)
     return _neo4j_instance
+
 

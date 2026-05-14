@@ -11,12 +11,12 @@ Covers:
   - Multi-service chain: A→B(ERROR)→C(ERROR) — root=B, propagation=[B,C]
 """
 import sys
+
 sys.path.insert(0, ".")
 
 from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock
-import pytest
 
+import pytest
 
 # ── Helpers ────────────────────────────────────────────────────
 
@@ -221,9 +221,9 @@ class TestCypherQueries:
 
     def test_all_cypher_templates_importable(self):
         from graph.queries import (
-            UPSERT_SERVICE, UPSERT_SERVICE_CALL_EDGE,
-            GET_UPSTREAM_SERVICES, GET_DOWNSTREAM_SERVICES,
-            GET_FULL_TOPOLOGY, STORE_FAILURE_CASCADE, INDEXES,
+            INDEXES,
+            UPSERT_SERVICE,
+            UPSERT_SERVICE_CALL_EDGE,
         )
         assert "MERGE" in UPSERT_SERVICE
         assert "CALLS" in UPSERT_SERVICE_CALL_EDGE

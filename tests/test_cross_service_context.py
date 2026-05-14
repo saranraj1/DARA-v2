@@ -10,9 +10,11 @@ Covers:
   - build() returns correct services_fetched count
 """
 import sys
+
 sys.path.insert(0, ".")
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock
+
 import pytest
 
 

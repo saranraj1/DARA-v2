@@ -194,7 +194,54 @@ class Settings(
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = Field(default="INFO")
     cors_origins: list[str] = Field(default=["http://localhost:3000"])
 
+    # ── Phase 4: Auth ─────────────────────────────────────────
+    admin_username: str = Field(default="dara", description="Admin UI username")
+    admin_password: str = Field(default="dara_admin_2024", description="Admin UI password")
+    jwt_secret: str = Field(
+        default="dara-jwt-secret-key-change-in-production",
+        description="Secret for signing JWT access tokens",
+    )
+    jwt_expire_hours: int = Field(default=24, description="JWT token lifetime in hours")
 
+    # ── Phase 4: Multi-Tenant ────────────────────────────────
+    default_org_id: str = Field(default="default", description="Default tenant org ID")
+
+
+    # GitHub organisation that owns all monitored repos (used by SEV-6 repo resolver)
+    github_org: str = Field(
+        default="your-org",
+        description="GitHub organisation owning monitored repos (e.g. 'acme-corp')",
+    )
+    # Explicit service → full repo allowlist, e.g. '{"orders-svc": "acme-corp/orders"}'
+    # Overrides regex sanitisation when a service name is found in this map.
+    known_github_repos: dict[str, str] = Field(
+        default_factory=dict,
+        description="Map of service_name → org/repo for GitHub PR creation",
+    )
+    # Personal Access Token — fallback for PR creation when App lacks Contents write permission
+    # Needs: Contents (Read & Write) + Pull requests (Read & Write) on target repos
+    github_pat: str = Field(
+        default="",
+        description="GitHub PAT for direct PR creation (bypasses App permission restrictions)",
+    )
+
+    # MinIO object storage (fine-tuning data export)
+    minio_endpoint: str | None = Field(
+        default=None,
+        description="MinIO endpoint e.g. localhost:9000",
+    )
+    minio_access_key: str | None = Field(
+        default=None,
+        description="MinIO access key (set via MINIO_ACCESS_KEY env var)",
+    )
+    minio_secret_key: str | None = Field(
+        default=None,
+        description="MinIO secret key (set via MINIO_SECRET_KEY env var)",
+    )
+    minio_bucket: str = Field(
+        default="dara-training-data",
+        description="MinIO bucket for fine-tuning JSONL exports",
+    )
 
     @computed_field  # type: ignore[prop-decorator]
     @property

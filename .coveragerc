@@ -1,0 +1,22 @@
+[run]
+source = agents, api/routers, context, graph, storage/models.py
+omit =
+    tests/*
+    */__pycache__/*
+    */site-packages/*
+    run_*.py
+    verify_*.py
+    workers/*
+    validation/*
+    monitoring/*
+    alembic/*
+    output/*
+
+[report]
+exclude_lines =
+    pragma: no cover
+    def __repr__
+    if TYPE_CHECKING:
+    raise NotImplementedError
+    except Exception:
+    pass

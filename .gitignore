@@ -12,6 +12,10 @@ __pycache__/
 venv/
 dist/
 build/
+.pytest_cache/
+htmlcov/
+.coverage
+coverage.xml
 
 # Temp / scratch
 verify_server.py
@@ -27,3 +31,16 @@ redis_data/
 qdrant_data/
 neo4j_data/
 minio_data/
+
+# Word documents
+*.docx
+*.doc
+
+# Node / Frontend
+node_modules/
+artisan-admin/node_modules/
+artisan-admin/dist/
+artisan-admin/.vite/
+admin_ui/node_modules/
+admin_ui/dist/
+*.tsbuildinfo

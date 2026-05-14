@@ -3,6 +3,7 @@ DARA — Main entry point
 Run with: uvicorn main:app --reload --port 8000
 """
 import uvicorn
+
 from api.main import app  # noqa: F401 — re-export for uvicorn
 
 if __name__ == "__main__":

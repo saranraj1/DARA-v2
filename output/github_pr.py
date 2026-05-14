@@ -1,5 +1,7 @@
 from __future__ import annotations
+
 import logging
+
 from config.settings import get_settings
 
 logger = logging.getLogger(__name__)
@@ -8,12 +10,24 @@ logger = logging.getLogger(__name__)
 class GitHubPRCreator:
     """
     Creates GitHub Pull Requests with the generated patch using GitHub REST API.
-    Uses the GitHub App installation token for authentication.
+    Auth priority: GITHUB_PAT (if set) → GitHub App installation token.
     Graceful degradation: returns None if not configured.
     """
 
     def __init__(self) -> None:
         self._settings = get_settings()
+
+    async def _get_token(self) -> str | None:
+        """
+        Returns the best available token:
+        1. GITHUB_PAT from settings/env (direct, no expiry issues)
+        2. GitHub App installation token (JWT-based, 1h expiry)
+        """
+        pat = getattr(self._settings, "github_pat", None)
+        if pat and pat.strip():
+            logger.debug("GitHubPR: using GITHUB_PAT")
+            return pat.strip()
+        return await self._get_installation_token()
 
     async def create_pr(
         self,
@@ -24,9 +38,9 @@ class GitHubPRCreator:
         fix_explanation: str,
         branch_name: str | None = None,
     ) -> dict | None:
-        token = await self._get_installation_token()
+        token = await self._get_token()
         if not token:
-            logger.warning("GitHubPR: no install token, skipping PR creation")
+            logger.warning("GitHubPR: no token available (set GITHUB_PAT or check GitHub App), skipping PR creation")
             return None
 
         import httpx
@@ -95,7 +109,9 @@ class GitHubPRCreator:
 
     async def _get_installation_token(self) -> str | None:
         try:
-            import time, jwt
+            import time
+
+            import jwt
             pem_path = self._settings.resolved_pem_path
             if not pem_path or not __import__("pathlib").Path(pem_path).exists():
                 return None
