@@ -576,8 +576,6 @@ DARA is built on the shoulders of giants:
 
 <div align="center">
 
-**Built with ❤️ by the DARA Team**
-
 *Autonomous bug resolution for the modern engineering team.*
 
 </div>
