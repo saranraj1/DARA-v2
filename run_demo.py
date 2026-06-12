@@ -24,12 +24,18 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import io
 import socket
 import sys
 import textwrap
 import time
 from dataclasses import dataclass
 from typing import Optional
+
+# Force UTF-8 output on Windows — prevents cp1252 UnicodeEncodeError with
+# box-drawing chars and emoji used in the demo output.
+if sys.stdout.encoding and sys.stdout.encoding.lower() not in ('utf-8', 'utf_8'):
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
 
 sys.path.insert(0, ".")
 

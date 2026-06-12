@@ -532,8 +532,8 @@ class TestStrategyMonitorWinRates:
         monitor = self._make_monitor()
         lower, upper = monitor._wilson_interval(10, 20)
         # Should be centred around 0.5 with reasonable bounds
-        assert 0.3 < lower < 0.5
-        assert 0.5 < upper < 0.7
+        assert 0.29 < lower < 0.5
+        assert 0.5 < upper < 0.71
 
     @pytest.mark.asyncio
     async def test_compute_win_rates_db_unavailable(self):

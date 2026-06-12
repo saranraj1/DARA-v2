@@ -1,5 +1,7 @@
 """
-DARA — startup env validation.
+scripts/validate_env.py
+============================
+DARA startup env validation.
 Run before starting DARA to check all required env vars are set.
 Usage:
     python scripts/validate_env.py          # interactive
@@ -7,9 +9,14 @@ Usage:
 """
 from __future__ import annotations
 
+import io
 import os
 import sys
 import argparse
+
+# Force UTF-8 output on Windows to avoid cp1252 UnicodeEncodeError
+if sys.stdout.encoding and sys.stdout.encoding.lower() != 'utf-8':
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
 
 sys.path.insert(0, ".")
 

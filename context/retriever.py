@@ -3,15 +3,25 @@ from __future__ import annotations
 
 import logging
 
-import tiktoken
-
 from config.settings import get_settings
 from storage.qdrant_client import QdrantStore
 
 logger = logging.getLogger(__name__)
-_TOKENIZER = tiktoken.get_encoding("cl100k_base")
+_TOKENIZER = None  # Lazy-loaded on first use — avoids MemoryError at import time
+
 
 def count_tokens(text: str) -> int:
+    """Count tokens using tiktoken (lazy-loaded). Falls back to char/4 estimate."""
+    global _TOKENIZER
+    if _TOKENIZER is None:
+        try:
+            import tiktoken as _tiktoken
+            _TOKENIZER = _tiktoken.get_encoding("cl100k_base")
+        except Exception:
+            # Corrupted cache or offline — use character estimate (4 chars ≈ 1 token)
+            _TOKENIZER = "fallback"
+    if _TOKENIZER == "fallback":
+        return max(1, len(text) // 4)
     return len(_TOKENIZER.encode(text))
 
 class ContextRetriever:
