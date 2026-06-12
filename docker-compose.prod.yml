@@ -1,9 +1,21 @@
 version: "3.8"
 
 # ============================================================
-# DARA — Full Local Development Stack
-# Run: docker compose -f docker-compose.dev.yml up -d
-# All services have healthchecks. Wait for "healthy" before starting app.
+# DARA — Production Docker Compose
+# All secrets are read from environment variables.
+# No hardcoded credentials.
+#
+# Required environment variables (set in .env or CI secrets):
+#   POSTGRES_PASSWORD, REDIS_PASSWORD, NEO4J_PASSWORD,
+#   MINIO_ROOT_USER, MINIO_ROOT_PASSWORD,
+#   GRAFANA_ADMIN_PASSWORD
+#
+# Usage:
+#   export $(cat .env.prod | xargs)
+#   docker compose -f docker-compose.prod.yml up -d
+#
+# Optional Elasticsearch/Kibana logging stack:
+#   docker compose -f docker-compose.prod.yml --profile logging up -d
 # ============================================================
 
 x-restart-policy: &restart-policy
@@ -13,50 +25,60 @@ x-logging: &default-logging
   logging:
     driver: "json-file"
     options:
-      max-size: "10m"
-      max-file: "3"
+      max-size: "20m"
+      max-file: "5"
 
 services:
 
   # ── PostgreSQL 16 ──────────────────────────────────────────
   postgres:
     image: timescale/timescaledb:latest-pg16
-    container_name: dara_postgres
+    container_name: dara_prod_postgres
     <<: [*restart-policy, *default-logging]
     environment:
       POSTGRES_DB: dara
       POSTGRES_USER: dara
-      POSTGRES_PASSWORD: dara_dev
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256"
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"    # Bind to localhost only — not exposed externally
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./docker/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2G
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U dara -d dara"]
       interval: 10s
       timeout: 5s
       retries: 5
-      start_period: 10s
+      start_period: 15s
 
   # ── Redis 7 ───────────────────────────────────────────────
   redis:
     image: redis:7-alpine
-    container_name: dara_redis
+    container_name: dara_prod_redis
     <<: [*restart-policy, *default-logging]
     command: >
       redis-server
       --appendonly yes
-      --maxmemory 512mb
+      --maxmemory 1gb
       --maxmemory-policy allkeys-lru
-      --requirepass dara_dev
+      --requirepass ${REDIS_PASSWORD}
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     volumes:
       - redis_data:/data
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1G
     healthcheck:
-      test: ["CMD", "redis-cli", "-a", "dara_dev", "ping"]
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -64,154 +86,120 @@ services:
   # ── Qdrant Vector DB ──────────────────────────────────────
   qdrant:
     image: qdrant/qdrant:latest
-    container_name: dara_qdrant
+    container_name: dara_prod_qdrant
     <<: [*restart-policy, *default-logging]
     ports:
-      - "6333:6333"
-      - "6334:6334"
+      - "127.0.0.1:6333:6333"
+      - "127.0.0.1:6334:6334"
     volumes:
       - qdrant_data:/qdrant/storage
     environment:
       QDRANT__SERVICE__HTTP_PORT: 6333
       QDRANT__SERVICE__GRPC_PORT: 6334
-      QDRANT__LOG_LEVEL: INFO
+      QDRANT__LOG_LEVEL: WARN
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2G
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:6333/healthz || exit 1"]
-      interval: 10s
+      interval: 15s
       timeout: 5s
       retries: 5
-      start_period: 15s
+      start_period: 20s
 
   # ── Neo4j 5 Community ─────────────────────────────────────
   neo4j:
     image: neo4j:5-community
-    container_name: dara_neo4j
+    container_name: dara_prod_neo4j
     <<: [*restart-policy, *default-logging]
     environment:
-      NEO4J_AUTH: neo4j/dara_dev
+      NEO4J_AUTH: neo4j/${NEO4J_PASSWORD}
       NEO4J_PLUGINS: '["apoc"]'
       NEO4J_dbms_security_procedures_unrestricted: apoc.*
-      NEO4J_dbms_memory_heap_initial__size: 512m
-      NEO4J_dbms_memory_heap_max__size: 1G
-      NEO4J_dbms_memory_pagecache_size: 512m
+      NEO4J_dbms_memory_heap_initial__size: 1G
+      NEO4J_dbms_memory_heap_max__size: 2G
+      NEO4J_dbms_memory_pagecache_size: 1G
     ports:
-      - "7474:7474"
-      - "7687:7687"
+      - "127.0.0.1:7474:7474"
+      - "127.0.0.1:7687:7687"
     volumes:
       - neo4j_data:/data
       - neo4j_logs:/logs
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 3G
     healthcheck:
       test: ["CMD-SHELL", "wget -O /dev/null -q http://localhost:7474 || exit 1"]
-      interval: 15s
-      timeout: 10s
-      retries: 5
-      start_period: 30s
-
-  # ── Elasticsearch OSS 7.10 ──────────────────────────────────
-  # OPTIONAL: Only starts with --profile logging
-  # Default stack runs without it to save ~1 GB RAM.
-  # Usage: docker compose -f docker-compose.dev.yml --profile logging up -d
-  elasticsearch:
-    image: docker.elastic.co/elasticsearch/elasticsearch-oss:7.10.2
-    container_name: dara_elasticsearch
-    profiles: ["logging"]
-    <<: [*restart-policy, *default-logging]
-    environment:
-      discovery.type: single-node
-      ES_JAVA_OPTS: "-Xms512m -Xmx512m"
-      cluster.name: dara-cluster
-      bootstrap.memory_lock: "true"
-    ulimits:
-      memlock:
-        soft: -1
-        hard: -1
-    ports:
-      - "9200:9200"
-    volumes:
-      - es_data:/usr/share/elasticsearch/data
-    healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health?wait_for_status=yellow&timeout=5s || exit 1"]
-      interval: 15s
-      timeout: 10s
-      retries: 5
-      start_period: 30s
-
-  # ── Kibana OSS 7.10 ─────────────────────────────────────────
-  # OPTIONAL: Only starts with --profile logging
-  kibana:
-    image: docker.elastic.co/kibana/kibana-oss:7.10.2
-    container_name: dara_kibana
-    profiles: ["logging"]
-    <<: [*restart-policy, *default-logging]
-    environment:
-      ELASTICSEARCH_HOSTS: http://elasticsearch:9200
-      SERVER_NAME: dara-kibana
-    ports:
-      - "5601:5601"
-    depends_on:
-      elasticsearch:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:5601/api/status || exit 1"]
       interval: 20s
       timeout: 10s
       retries: 5
-      start_period: 60s
+      start_period: 45s
 
   # ── MinIO (S3-compatible Object Storage) ──────────────────
   minio:
     image: minio/minio:latest
-    container_name: dara_minio
+    container_name: dara_prod_minio
     <<: [*restart-policy, *default-logging]
     command: server /data --console-address ":9001"
     environment:
-      MINIO_ROOT_USER: dara
-      MINIO_ROOT_PASSWORD: dara_dev_secret
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
       MINIO_VOLUMES: /data
     ports:
-      - "9000:9000"
-      - "9001:9001"
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
     volumes:
       - minio_data:/data
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1G
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:9000/minio/health/live || exit 1"]
-      interval: 10s
+      interval: 15s
       timeout: 5s
       retries: 5
 
   # ── Prometheus ────────────────────────────────────────────
   prometheus:
     image: prom/prometheus:v2.51.0
-    container_name: dara_prometheus
+    container_name: dara_prod_prometheus
     <<: [*restart-policy, *default-logging]
     command:
       - "--config.file=/etc/prometheus/prometheus.yml"
       - "--storage.tsdb.path=/prometheus"
-      - "--storage.tsdb.retention.time=15d"
+      - "--storage.tsdb.retention.time=30d"
       - "--web.enable-lifecycle"
+      - "--web.listen-address=127.0.0.1:9090"  # localhost only
     ports:
-      - "9090:9090"
+      - "127.0.0.1:9090:9090"
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus_data:/prometheus
     healthcheck:
       test: ["CMD-SHELL", "wget -O /dev/null -q http://localhost:9090/-/healthy || exit 1"]
-      interval: 10s
+      interval: 15s
       timeout: 5s
       retries: 3
 
   # ── Grafana OSS ───────────────────────────────────────────
   grafana:
     image: grafana/grafana-oss:10.4.0
-    container_name: dara_grafana
+    container_name: dara_prod_grafana
     <<: [*restart-policy, *default-logging]
     environment:
       GF_SECURITY_ADMIN_USER: admin
-      GF_SECURITY_ADMIN_PASSWORD: dara_dev
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD}
       GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_SERVER_ROOT_URL: "${GRAFANA_ROOT_URL:-http://localhost:3000}"
       GF_PATHS_PROVISIONING: /etc/grafana/provisioning
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     volumes:
       - grafana_data:/var/lib/grafana
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
@@ -221,29 +209,85 @@ services:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:3000/api/health || exit 1"]
-      interval: 10s
+      interval: 15s
       timeout: 5s
       retries: 5
 
   # ── Jaeger Distributed Tracing ────────────────────────────
   jaeger:
     image: jaegertracing/all-in-one:1.57
-    container_name: dara_jaeger
+    container_name: dara_prod_jaeger
     <<: [*restart-policy, *default-logging]
     environment:
       COLLECTOR_OTLP_ENABLED: "true"
-      SPAN_STORAGE_TYPE: memory
-      MEMORY_MAX_TRACES: "50000"
+      SPAN_STORAGE_TYPE: badger          # Persistent, unlike in-memory
+      BADGER_EPHEMERAL: "false"
+      BADGER_DIRECTORY_VALUE: /badger/data
+      BADGER_DIRECTORY_KEY: /badger/data
+      MEMORY_MAX_TRACES: "100000"
     ports:
-      - "16686:16686"   # Jaeger UI  ← http://localhost:16686
-      - "4317:4317"     # OTLP gRPC  ← for OTel SDK
-      - "4318:4318"     # OTLP HTTP  ← primary endpoint used by DARA
-      - "14268:14268"   # Jaeger thrift HTTP collector
+      - "127.0.0.1:16686:16686"   # Jaeger UI
+      - "127.0.0.1:4317:4317"     # OTLP gRPC
+      - "127.0.0.1:4318:4318"     # OTLP HTTP
+    volumes:
+      - jaeger_data:/badger
     healthcheck:
       test: ["CMD-SHELL", "wget -O /dev/null -q http://localhost:16686 || exit 1"]
-      interval: 10s
+      interval: 15s
       timeout: 5s
       retries: 3
+
+  # ── Elasticsearch (optional — enable with --profile logging) ──
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch-oss:7.10.2
+    container_name: dara_prod_elasticsearch
+    <<: [*restart-policy, *default-logging]
+    profiles: ["logging"]
+    environment:
+      discovery.type: single-node
+      ES_JAVA_OPTS: "-Xms1g -Xmx1g"
+      cluster.name: dara-prod-cluster
+      bootstrap.memory_lock: "true"
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    ports:
+      - "127.0.0.1:9200:9200"
+    volumes:
+      - es_data:/usr/share/elasticsearch/data
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2G
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health?wait_for_status=yellow&timeout=5s || exit 1"]
+      interval: 20s
+      timeout: 10s
+      retries: 5
+      start_period: 45s
+
+  # ── Kibana (optional — enable with --profile logging) ─────
+  kibana:
+    image: docker.elastic.co/kibana/kibana-oss:7.10.2
+    container_name: dara_prod_kibana
+    <<: [*restart-policy, *default-logging]
+    profiles: ["logging"]
+    environment:
+      ELASTICSEARCH_HOSTS: http://elasticsearch:9200
+      SERVER_NAME: dara-kibana
+    ports:
+      - "127.0.0.1:5601:5601"
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:5601/api/status || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 90s
 
 volumes:
   postgres_data:
@@ -251,12 +295,13 @@ volumes:
   qdrant_data:
   neo4j_data:
   neo4j_logs:
-  es_data:
   minio_data:
   prometheus_data:
   grafana_data:
+  jaeger_data:
+  es_data:
 
 networks:
   default:
-    name: dara_network
+    name: dara_prod_network
     driver: bridge

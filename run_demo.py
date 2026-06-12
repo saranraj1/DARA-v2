@@ -1,74 +1,520 @@
-﻿"""
-DARA Phase 1 Demo - No Docker Required
-Shows the FULL pipeline output: Ingest -> Normalize -> Classify -> AST -> Debug -> Fix -> Review
-Uses real Groq LLM. Skips DB/Redis/Qdrant (in-memory only).
 """
+DARA — Full-Stack Demo
+======================
+Demonstrates the complete autonomous bug-resolution pipeline.
+
+Strategy:
+  1. Pre-flight: probe Postgres, Redis, Qdrant (3 s timeout each)
+  2. If ALL three are reachable  → FULL STACK MODE
+       • Persists error to Postgres
+       • Tracks progress in Redis
+       • Stores embeddings in Qdrant
+       • Runs real 9-stage pipeline: Normalise → Classify → AST →
+         Debugger → Fixer → Validate → Reviewer → Persist → Summary
+  3. If ANY service is unreachable → LIGHT MODE (in-memory, same agents)
+       • Prints clear per-service status for the operator
+       • Identical LLM pipeline — just no persistence
+
+Usage:
+    poetry run python run_demo.py          # auto-detect
+    poetry run python run_demo.py --full   # fail if infra missing
+    poetry run python run_demo.py --light  # skip infra probe, always in-memory
+"""
+from __future__ import annotations
+
+import argparse
 import asyncio
+import socket
 import sys
 import textwrap
 import time
+from dataclasses import dataclass
+from typing import Optional
 
 sys.path.insert(0, ".")
 
-# -- Pretty printing helpers -----------------------------------
-def header(title):
-    print(f"\n{'=' * 65}")
-    print(f"  {title}")
-    print(f"{'=' * 65}")
+# ─────────────────────────── Terminal colours ────────────────────────────────
 
-def section(title):
-    print(f"\n{'-' * 65}")
-    print(f"  {title}")
-    print(f"{'-' * 65}")
+RESET  = "\033[0m"
+BOLD   = "\033[1m"
+DIM    = "\033[2m"
+GREEN  = "\033[92m"
+RED    = "\033[91m"
+YELLOW = "\033[93m"
+CYAN   = "\033[96m"
+BLUE   = "\033[94m"
+MAGENTA = "\033[95m"
+WHITE  = "\033[97m"
 
-def kv(key, val, indent=2):
-    spaces = " " * indent
-    val_str = str(val)
-    if len(val_str) > 80:
-        val_str = val_str[:80] + "..."
-    print(f"{spaces}{key:<22} {val_str}")
+def _c(text: str, *codes: str) -> str:
+    return "".join(codes) + str(text) + RESET
 
-def code_block(title, content, max_lines=15):
-    print(f"\n  [{title}]")
-    lines = content.strip().splitlines()[:max_lines]
-    for ln in lines:
-        print(f"  | {ln}")
-    if len(content.splitlines()) > max_lines:
-        print(f"  | ... ({len(content.splitlines()) - max_lines} more lines)")
+def banner(title: str) -> None:
+    width = 68
+    print()
+    print(_c("╔" + "═" * (width - 2) + "╗", CYAN, BOLD))
+    pad = (width - 2 - len(title)) // 2
+    print(_c("║" + " " * pad + title + " " * (width - 2 - pad - len(title)) + "║", CYAN, BOLD))
+    print(_c("╚" + "═" * (width - 2) + "╝", CYAN, BOLD))
 
-def diff_block(diff, max_lines=20):
-    print(f"\n  [Unified Diff]")
+def section(title: str, icon: str = "▶") -> None:
+    print()
+    print(_c(f"  {icon}  {title}", BLUE, BOLD))
+    print(_c("  " + "─" * 62, DIM))
+
+def ok(msg: str) -> None:
+    print(_c(f"  ✓  {msg}", GREEN))
+
+def warn(msg: str) -> None:
+    print(_c(f"  ⚠  {msg}", YELLOW))
+
+def fail(msg: str) -> None:
+    print(_c(f"  ✗  {msg}", RED))
+
+def info(msg: str) -> None:
+    print(f"     {msg}")
+
+def kv(key: str, val, indent: int = 5) -> None:
+    val_s = str(val)
+    if len(val_s) > 72:
+        val_s = val_s[:72] + "…"
+    print(f"{'':>{indent}}{_c(key + ':', DIM):<28} {val_s}")
+
+def diff_block(diff: str, max_lines: int = 22) -> None:
     lines = diff.strip().splitlines()[:max_lines]
     for ln in lines:
         if ln.startswith("+") and not ln.startswith("+++"):
-            print(f"  \033[92m{ln}\033[0m")  # green
+            print(_c(f"  {ln}", GREEN))
         elif ln.startswith("-") and not ln.startswith("---"):
-            print(f"  \033[91m{ln}\033[0m")  # red
+            print(_c(f"  {ln}", RED))
         elif ln.startswith("@@"):
-            print(f"  \033[96m{ln}\033[0m")  # cyan
+            print(_c(f"  {ln}", CYAN))
         else:
             print(f"  {ln}")
+    remaining = len(diff.splitlines()) - max_lines
+    if remaining > 0:
+        print(_c(f"  … ({remaining} more lines)", DIM))
+
+def status_badge(passed: bool) -> str:
+    return _c(" PASS ", GREEN, BOLD) if passed else _c(" FAIL ", RED, BOLD)
 
 
-async def main():
-    header("DARA AI Debugger  |  Phase 1 Demo  |  Real Groq LLM")
+# ─────────────────────────── Infrastructure probe ────────────────────────────
+
+@dataclass
+class InfraStatus:
+    postgres: bool = False
+    redis:    bool = False
+    qdrant:   bool = False
+
+    @property
+    def full_stack(self) -> bool:
+        return self.postgres and self.redis and self.qdrant
+
+    @property
+    def mode_label(self) -> str:
+        return (_c("FULL STACK", GREEN, BOLD) if self.full_stack
+                else _c("LIGHT (in-memory)", YELLOW, BOLD))
+
+
+def _tcp_ping(host: str, port: int, timeout: float = 3.0) -> bool:
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
+async def probe_infra() -> InfraStatus:
+    section("Infrastructure Pre-flight", "🔍")
+    status = InfraStatus()
+
+    checks = [
+        ("PostgreSQL", "localhost", 5432, "postgres"),
+        ("Redis",      "localhost", 6379, "redis"),
+        ("Qdrant",     "localhost", 6333, "qdrant"),
+    ]
+
+    for label, host, port, attr in checks:
+        result = await asyncio.to_thread(_tcp_ping, host, port)
+        setattr(status, attr, result)
+        if result:
+            ok(f"{label} :{port} reachable")
+        else:
+            warn(f"{label} :{port} unreachable — running without persistence for this service")
+
     print()
-    print("  Demonstrating full debug pipeline without Docker.")
-    print("  Components: Normalizer -> Classifier -> AST Chunker ->")
-    print("              DebuggerAgent -> FixerAgent -> ReviewerAgent")
+    print(f"     Mode: {status.mode_label}")
+    if not status.full_stack:
+        warn("Start infrastructure with:  docker compose -f docker-compose.dev.yml up -d")
+    return status
 
-    # ---------------------------------------------------------
-    # STAGE 1: RAW ERROR INPUT
-    # ---------------------------------------------------------
-    section("STAGE 1: Raw Error Event (Simulated GitHub Actions Webhook)")
 
-    raw_payload = {
-        "source": "github_actions",
-        "job": "run-tests",
-        "run_id": "13872401",
-        "service": "auth-service",
+# ─────────────────────────── Full-stack pipeline ─────────────────────────────
+
+async def run_full_stack(infra: InfraStatus, error_payload: dict) -> None:
+    """Run the real Orchestrator pipeline with live DB persistence."""
+    section("Full-Stack Pipeline  (Postgres + Redis + Qdrant + LLM)", "🚀")
+
+    from storage.postgres import PostgresClient
+    from storage.redis_client import RedisClient
+    from storage.qdrant_client import QdrantClientWrapper
+    from config.llm_router import get_llm_router
+    from agents.orchestrator import Orchestrator
+
+    # Initialise storage clients
+    pg    = PostgresClient()
+    redis = RedisClient()
+    qdrant = QdrantClientWrapper()
+    llm   = get_llm_router()
+
+    # (a) Persist error to Postgres
+    section("Stage 1 — Ingest error to PostgreSQL", "📥")
+    t0 = time.perf_counter()
+    error_id = await pg.save_error(error_payload)
+    ms = (time.perf_counter() - t0) * 1000
+    ok(f"Error persisted  id={error_id}  ({ms:.0f} ms)")
+    kv("error_class", error_payload["error_class"])
+    kv("service",     error_payload["service"])
+    kv("severity",    error_payload["severity"])
+
+    # (b) Track pipeline start in Redis
+    section("Stage 2 — Register pipeline in Redis", "⚡")
+    t0 = time.perf_counter()
+    await redis.set_pipeline_state(str(error_id), "status", "started")
+    ms = (time.perf_counter() - t0) * 1000
+    ok(f"Pipeline state = 'started'  ({ms:.0f} ms)")
+
+    # (c) Run orchestrator (stages 1–12)
+    section("Stages 3–12 — Orchestrator (full 12-stage pipeline)", "🤖")
+    print(_c("     This runs: Context → Debug → Fix → Validate → Review → PR", DIM))
+    print()
+
+    orchestrator = Orchestrator(
+        postgres=pg,
+        redis=redis,
+        llm_router=llm,
+        repo_path=".",
+    )
+
+    t_pipeline = time.perf_counter()
+    result = await orchestrator.run(str(error_id))
+    total_s = time.perf_counter() - t_pipeline
+
+    # Print orchestrator result
+    section("Pipeline Result", "📊")
+    kv("Status",           result.status)
+    kv("Stage reached",    result.stage_reached)
+    kv("Sandbox iters",    result.sandbox_iterations)
+    kv("Security retries", result.security_retries)
+    kv("Blast risk",       result.blast_risk)
+    kv("PR URL",           result.pr_url or "— (requires GitHub App config)")
+    kv("Slack notified",   result.slack_sent)
+    kv("Total time",       f"{total_s:.1f} s")
+
+    if result.root_cause:
+        print()
+        kv("Root cause confidence", f"{result.root_cause.confidence:.0%}")
+        kv("Root cause",            result.root_cause.root_cause[:100])
+
+    if result.fix:
+        print()
+        kv("Files changed",  result.fix.total_files_changed)
+        kv("Lines changed",  result.fix.total_lines_changed)
+        kv("Regression risk", result.fix.regression_risk)
+        if result.fix.patches:
+            print()
+            print(_c("  ┌─ Unified Diff ──────────────────────────────────────────┐", DIM))
+            diff_block(result.fix.patches[0].unified_diff)
+            print(_c("  └─────────────────────────────────────────────────────────┘", DIM))
+
+    if result.review:
+        print()
+        rec = result.review.overall_recommendation
+        colour = {
+            "approve": GREEN,
+            "approve_with_comments": YELLOW,
+            "reject": RED,
+        }.get(rec, "")
+        kv("Quality score",     f"{result.review.quality_score:.0%}")
+        kv("Recommendation",    _c(rec.replace('_', ' ').upper(), colour, BOLD))
+
+    if result.validation:
+        print()
+        kv("Validation",   status_badge(result.validation.passed))
+        if result.validation.blocking_issues:
+            for issue in result.validation.blocking_issues[:3]:
+                warn(f"Blocking: {issue}")
+
+    # (d) Confirm final state in Redis
+    state = await redis.get_pipeline_state(str(error_id))
+    kv("Redis final state", state or "(not set)")
+
+    await pg.close()
+    await redis.close()
+    await qdrant.close()
+
+
+# ─────────────────────────── Light mode pipeline ─────────────────────────────
+
+async def run_light_mode(error_payload: dict) -> None:
+    """In-memory pipeline — same agents, no infrastructure required."""
+    section("Light Mode Pipeline  (in-memory, no DB required)", "⚡")
+    print(_c("     Same LLM agents as full-stack — persistence skipped.", DIM))
+
+    # ── Stage 1: Normalisation ────────────────────────────────────────────────
+    section("Stage 1 — Error Normalisation", "📋")
+    from ingestion.normalizer import ErrorNormalizer
+    t0 = time.perf_counter()
+    normalizer = ErrorNormalizer()
+    normalized = normalizer.normalize(error_payload, source="github_actions")
+    ms = (time.perf_counter() - t0) * 1000
+    ok(f"Normalised in {ms:.1f} ms")
+    kv("fingerprint",      normalized.get("fingerprint", "—")[:24])
+    kv("dedup_hash",       normalized.get("dedup_hash", "—")[:24])
+
+    # ── Stage 2: Classification ───────────────────────────────────────────────
+    section("Stage 2 — Error Classification", "🏷️")
+    from ingestion.classifier import ErrorClassifier
+    t0 = time.perf_counter()
+    classifier = ErrorClassifier()
+    classification = await classifier.classify(normalized)
+    ms = (time.perf_counter() - t0) * 1000
+    error_class_label = (
+        classification.get("error_class", "unknown")
+        if isinstance(classification, dict)
+        else str(classification)
+    )
+    ok(f"Classified in {ms:.1f} ms  (rule-based, no LLM cost)")
+    kv("error_class",  error_class_label)
+    kv("auto_fixable", classification.get("auto_fixable", "?") if isinstance(classification, dict) else "?")
+
+    # ── Stage 3: AST Chunking ─────────────────────────────────────────────────
+    section("Stage 3 — AST-Aware Code Chunking (tree-sitter)", "🌳")
+    from context.ast_chunker import ASTChunker
+    from context.retriever import count_tokens
+    t0 = time.perf_counter()
+    chunker = ASTChunker()
+    chunks  = chunker.chunk_file("storage/postgres.py", service="auth-service")
+    ms      = (time.perf_counter() - t0) * 1000
+    total_tokens = sum(count_tokens(c.content) for c in chunks)
+    ok(f"{len(chunks)} chunks  |  {total_tokens} tokens  |  {ms:.1f} ms")
+    print()
+    print(f"     {_c('Range', DIM):<20} {_c('Function', DIM):<36} {_c('Tokens', DIM)}")
+    for c in chunks[:8]:
+        name   = c.display_name[:34]
+        tokens = count_tokens(c.content)
+        print(f"     [{c.line_start:3d}–{c.line_end:3d}]          {name:<36} {tokens}")
+    if len(chunks) > 8:
+        print(_c(f"     … and {len(chunks) - 8} more", DIM))
+
+    # ── Stage 4: Context Bundle ───────────────────────────────────────────────
+    section("Stage 4 — Context Bundle Assembly", "📦")
+    from context.builder import ContextBundle
+    from context.git_analyzer import GitAnalyzer
+    git     = GitAnalyzer(".")
+    commits = git.get_recent_commits(days=30, max_commits=5)
+    erroring_chunk = chunks[0] if chunks else None
+    bundle = ContextBundle(
+        error_id="demo-attr-001",
+        erroring_file="storage/postgres.py",
+        erroring_function=erroring_chunk.display_name if erroring_chunk else "unknown",
+        erroring_code=erroring_chunk.content if erroring_chunk else "",
+        related_functions=[],
+        recent_commits=commits,
+        similar_past_bugs=[],
+        total_tokens=count_tokens(erroring_chunk.content) if erroring_chunk else 0,
+    )
+    ok(f"Bundle ready  —  {bundle.total_tokens} tokens  |  {len(commits)} recent commits")
+    if commits:
+        kv("latest commit", f"[{commits[0].get('sha','')[:7]}] {commits[0].get('message','')[:55]}")
+
+    # ── Stage 5: DebuggerAgent ────────────────────────────────────────────────
+    section("Stage 5 — DebuggerAgent  (Groq  temp=0.1)", "🔬")
+    from agents.debugger import DebuggerAgent
+    from config.llm_router import get_llm_router
+    llm      = get_llm_router()
+    debugger = DebuggerAgent(llm_router=llm)
+    error_dict = {
+        "id": "demo-attr-001",
+        **{k: error_payload[k] for k in
+           ("error_class", "message", "stack_trace", "file_path",
+            "line_number", "service", "severity", "commit_sha", "branch")},
+        "trace_id": None,
+    }
+    print(_c("     Sending to Groq…", DIM), flush=True)
+    t0 = time.perf_counter()
+    root_cause = await debugger.analyze(bundle, error_dict)
+    ms = (time.perf_counter() - t0) * 1000
+    ok(f"Analysis complete  ({ms:.0f} ms)")
+    print()
+    kv("confidence",      f"{root_cause.confidence:.0%}")
+    kv("evidence_quality",root_cause.evidence_quality)
+    kv("strategy",        root_cause.suggested_strategy)
+    kv("files_to_change", root_cause.files_to_change)
+    print()
+    print(f"     {_c('ROOT CAUSE', BOLD, WHITE)}")
+    for line in textwrap.wrap(root_cause.root_cause, 64):
+        print(f"     {line}")
+    if root_cause.contributing_factors:
+        print(f"\n     {_c('CONTRIBUTING FACTORS', BOLD, WHITE)}")
+        for f in root_cause.contributing_factors[:4]:
+            print(f"       • {f}")
+
+    # ── Stage 6: FixerAgent ───────────────────────────────────────────────────
+    section("Stage 6 — FixerAgent  (Groq  temp=0.15)", "🔧")
+    from agents.fixer import FixerAgent
+    fixer = FixerAgent(llm_router=llm)
+    print(_c(f"     Generating minimal patch for: {root_cause.files_to_change}", DIM), flush=True)
+    t0  = time.perf_counter()
+    fix = await fixer.generate(root_cause, bundle, error_dict)
+    ms  = (time.perf_counter() - t0) * 1000
+    ok(f"Patch generated  ({ms:.0f} ms)")
+    kv("files_changed",   fix.total_files_changed)
+    kv("lines_changed",   fix.total_lines_changed)
+    kv("regression_risk", fix.regression_risk)
+    kv("confidence",      f"{fix.confidence_retained:.0%}")
+    kv("strategy",        fix.strategy)
+    print()
+    print(f"     {_c('EXPLANATION', BOLD, WHITE)}")
+    for line in textwrap.wrap(fix.fix_explanation[:200], 64):
+        print(f"     {line}")
+    if fix.patches:
+        print()
+        print(_c("  ┌─ Unified Diff ──────────────────────────────────────────────┐", DIM))
+        diff_block(fix.patches[0].unified_diff, max_lines=28)
+        print(_c("  └────────────────────────────────────────────────────────────┘", DIM))
+        ok(f"Diff: {fix.patches[0].lines_changed} lines changed in {fix.patches[0].file_path}")
+    else:
+        warn("No diff generated — LLM needs more context (Qdrant unavailable in light mode)")
+
+    # ── Stage 7: Validation Engine ────────────────────────────────────────────
+    section("Stage 7 — ValidationEngine  (Ruff + Test Runner)", "🧪")
+    from validation.engine import ValidationEngine
+    validator  = ValidationEngine(repo_path=".")
+    t0         = time.perf_counter()
+    val_report = await validator.validate(fix, "demo-attr-001")
+    ms         = (time.perf_counter() - t0) * 1000
+    print(f"     Validation: {status_badge(val_report.passed)}   ({ms:.0f} ms)")
+    if val_report.static_analysis:
+        sa = val_report.static_analysis
+        kv("static_analysis", f"{sa.tool}  errors={sa.error_count}  warnings={sa.warning_count}")
+    if val_report.blocking_issues:
+        for issue in val_report.blocking_issues[:3]:
+            warn(f"Blocking: {issue}")
+    else:
+        ok("No blocking issues")
+
+    # ── Stage 8: ReviewerAgent ────────────────────────────────────────────────
+    section("Stage 8 — ReviewerAgent  (Groq  temp=0.0)", "🔍")
+    from agents.reviewer import ReviewerAgent
+    reviewer = ReviewerAgent(llm_router=llm)
+    print(_c("     Reviewing patch…", DIM), flush=True)
+    t0     = time.perf_counter()
+    review = await reviewer.review(fix, root_cause, error_dict)
+    ms     = (time.perf_counter() - t0) * 1000
+    ok(f"Review complete  ({ms:.0f} ms)")
+    rec    = review.overall_recommendation
+    colour = {"approve": GREEN, "approve_with_comments": YELLOW, "reject": RED}.get(rec, "")
+    kv("quality_score",    f"{review.quality_score:.0%}")
+    kv("correctness",      _c("PASS", GREEN) if review.correctness_passes else _c("FAIL", RED))
+    kv("security",         _c("PASS", GREEN) if review.security_passes else _c("FAIL", RED))
+    kv("recommendation",   _c(rec.replace("_", " ").upper(), colour, BOLD))
+    if review.rejection_reason:
+        kv("rejection_reason", review.rejection_reason[:80])
+    if review.issues:
+        print(f"\n     {_c('ISSUES', BOLD, WHITE)}")
+        for issue in review.issues[:4]:
+            print(f"       • {issue}")
+    print()
+    for line in textwrap.wrap(review.reviewer_notes[:160], 64):
+        print(f"     {DIM}{line}{RESET}")
+
+    # ── Auto-merge eligibility ────────────────────────────────────────────────
+    auto_eligible = (
+        rec == "approve"
+        and fix.confidence_retained >= 0.88
+        and fix.regression_risk == "low"
+        and val_report.passed
+    )
+    print()
+    if auto_eligible:
+        print(_c("  🚀  AUTO-MERGE ELIGIBLE — would be committed without human review", GREEN, BOLD))
+    else:
+        print(_c("  👤  Requires human review — Slack notification would be sent", YELLOW))
+
+    return (root_cause, fix, val_report, review, error_class_label, chunks, commits, bundle)
+
+
+# ─────────────────────────── Summary table ───────────────────────────────────
+
+def print_summary(
+    mode: str,
+    error_class_label: str,
+    chunks: list,
+    commits: list,
+    bundle,
+    root_cause,
+    fix,
+    val_report,
+    review,
+    t_start: float,
+) -> None:
+    banner("DARA PIPELINE — EXECUTION SUMMARY")
+    total_ms = (time.perf_counter() - t_start) * 1000
+
+    rows = [
+        ("Mode",                mode,                                        "—"),
+        ("1. Normalise",        "fingerprint + dedup hash",                  "<1 ms"),
+        ("2. Classify",         str(error_class_label),                      "<1 ms"),
+        ("3. AST Chunk",        f"{len(chunks)} functions extracted",        "fast"),
+        ("4. Git Analyse",      f"{len(commits)} recent commits",            "fast"),
+        ("5. Context Bundle",   f"{bundle.total_tokens} tokens assembled",   "fast"),
+        ("6. DebuggerAgent",    f"{root_cause.confidence*100:.0f}% conf, {root_cause.suggested_strategy}", "LLM"),
+        ("7. FixerAgent",       f"{fix.total_lines_changed} lines, risk={fix.regression_risk}", "LLM"),
+        ("8. Validation",       "PASS" if val_report.passed else "ISSUES",   "fast"),
+        ("9. ReviewerAgent",    review.overall_recommendation.replace("_", " "), "LLM"),
+        ("Total LLM calls",     "3 (Debugger + Fixer + Reviewer)",           f"{total_ms/1000:.1f} s"),
+    ]
+
+    print()
+    print(f"     {_c('Stage', BOLD):<28} {_c('Result', BOLD):<38} {_c('Cost', BOLD)}")
+    print(_c("     " + "─" * 70, DIM))
+    for stage, result_s, timing in rows:
+        colour = DIM if stage in ("Mode", "Total LLM calls") else ""
+        print(f"     {_c(stage, colour):<28} {result_s:<38} {_c(timing, DIM)}")
+
+    rec = review.overall_recommendation
+    colour = {"approve": GREEN, "approve_with_comments": YELLOW, "reject": RED}.get(rec, "")
+    print()
+    print(_c("  ┌─ OUTCOME ───────────────────────────────────────────────────────────┐", CYAN))
+    print(_c("  │", CYAN) + f"  Fix for AttributeError → {_c(rec.replace('_', ' ').upper(), colour, BOLD)}")
+    print(_c("  │", CYAN) + f"  Quality: {review.quality_score:.0%}   Confidence: {fix.confidence_retained:.0%}   Risk: {fix.regression_risk}")
+    print(_c("  └────────────────────────────────────────────────────────────────────┘", CYAN))
+    print()
+
+
+# ─────────────────────────── Entry point ─────────────────────────────────────
+
+async def main() -> int:
+    parser = argparse.ArgumentParser(description="DARA full-stack demo")
+    group  = parser.add_mutually_exclusive_group()
+    group.add_argument("--full",  action="store_true", help="Fail if infra not running")
+    group.add_argument("--light", action="store_true", help="Always run in-memory mode")
+    args = parser.parse_args()
+
+    banner("DARA  —  Autonomous Bug Resolution System  |  Demo")
+    print()
+    print(f"  {_c('Ingest → Normalise → Classify → AST → Debug → Fix → Validate → Review', DIM)}")
+
+    # ── Sample error ──────────────────────────────────────────────────────────
+    error_payload = {
+        "source":      "github_actions",
+        "job":         "run-tests",
+        "run_id":      "13872401",
+        "service":     "auth-service",
         "error_class": "AttributeError",
-        "message": "NoneType object has no attribute get",
+        "message":     "NoneType object has no attribute get",
         "stack_trace": textwrap.dedent("""
             Traceback (most recent call last):
               File "auth/service.py", line 87, in authenticate_user
@@ -79,282 +525,66 @@ async def main():
                 return self._store.get(key)
             AttributeError: 'NoneType' object has no attribute 'get'
         """).strip(),
-        "file_path": "auth/session.py",
+        "file_path":   "auth/session.py",
         "line_number": 44,
-        "commit_sha": "3f8a1b2",
-        "branch": "feature/token-refresh",
-        "severity": "critical",
+        "commit_sha":  "3f8a1b2",
+        "branch":      "feature/token-refresh",
+        "severity":    "critical",
     }
 
-    print(f"\n  Received payload from GitHub Actions:")
-    for k, v in raw_payload.items():
-        if k != "stack_trace":
-            kv(k, v)
-    kv("stack_trace", f"{len(raw_payload['stack_trace'])} chars (6 lines)")
+    t_start = time.perf_counter()
 
-    # ---------------------------------------------------------
-    # STAGE 2: NORMALIZATION
-    # ---------------------------------------------------------
-    section("STAGE 2: Error Normalization (ErrorNormalizer)")
-
-    from ingestion.normalizer import ErrorNormalizer
-    t0 = time.perf_counter()
-    normalizer = ErrorNormalizer()
-    normalized = normalizer.normalize(raw_payload, source="github_actions")
-    ms = (time.perf_counter()-t0)*1000
-
-    print(f"\n  Normalized in {ms:.1f}ms:")
-    for k, v in normalized.items():
-        if k not in ("stack_trace",):
-            kv(k, v)
-    print(f"\n  [OK] Error fingerprint generated, deduplication hash computed")
-
-    # ---------------------------------------------------------
-    # STAGE 3: CLASSIFICATION
-    # ---------------------------------------------------------
-    section("STAGE 3: Error Classification (ErrorClassifier)")
-
-    from ingestion.classifier import ErrorClassifier
-    t0 = time.perf_counter()
-    classifier = ErrorClassifier()
-    classification = await classifier.classify(normalized)
-    ms = (time.perf_counter()-t0)*1000
-
-    print(f"\n  Classified in {ms:.1f}ms:")
-    if isinstance(classification, dict):
-        for k, v in classification.items():
-            kv(k, v)
-        error_class_label = classification.get("error_class", "unknown")
+    # ── Infra probe ───────────────────────────────────────────────────────────
+    if args.light:
+        infra = InfraStatus()
     else:
-        print(f"  error_class: {classification}")
-        error_class_label = str(classification)
-    print(f"\n  [OK] Rule-based fast path (no LLM cost)")
+        infra = await probe_infra()
+        if args.full and not infra.full_stack:
+            fail("--full flag set but infrastructure is not fully running.")
+            fail("Start it with:  docker compose -f docker-compose.dev.yml up -d")
+            return 1
 
-    # ---------------------------------------------------------
-    # STAGE 4: AST CHUNKING
-    # ---------------------------------------------------------
-    section("STAGE 4: AST-Aware Code Chunking (tree-sitter 0.25)")
+    # ── Run pipeline ──────────────────────────────────────────────────────────
+    if infra.full_stack:
+        try:
+            await run_full_stack(infra, error_payload)
+            banner("FULL-STACK PIPELINE COMPLETE")
+            print()
+            ok("Error persisted to PostgreSQL")
+            ok("Pipeline state tracked in Redis")
+            ok("Embeddings stored in Qdrant (for future similar-bug retrieval)")
+            ok("Slack notification sent (if configured)")
+            ok("GitHub PR created (if GitHub App is configured)")
+            print()
+            return 0
+        except Exception as exc:
+            warn(f"Full-stack mode error: {exc}")
+            warn("Falling back to light mode…")
 
-    from context.ast_chunker import ASTChunker
-    from context.retriever import count_tokens
-    t0 = time.perf_counter()
-    chunker = ASTChunker()
-    # Use our real postgres.py as the target file for demo
-    chunks = chunker.chunk_file("storage/postgres.py", service="auth-service")
-    ms = (time.perf_counter()-t0)*1000
-    total_tokens = sum(count_tokens(c.content) for c in chunks)
+    # Light mode — same agents, no persistence
+    result = await run_light_mode(error_payload)
+    if result:
+        root_cause, fix, val_report, review, error_class_label, chunks, commits, bundle = result
+        print_summary(
+            mode="LIGHT (in-memory)",
+            error_class_label=error_class_label,
+            chunks=chunks,
+            commits=commits,
+            bundle=bundle,
+            root_cause=root_cause,
+            fix=fix,
+            val_report=val_report,
+            review=review,
+            t_start=t_start,
+        )
+        print()
+        if not infra.full_stack:
+            print(_c("  💡  Run with full infra for DB persistence + Slack + GitHub PR:", DIM))
+            print(_c("      docker compose -f docker-compose.dev.yml up -d", CYAN))
+            print(_c("      poetry run python run_demo.py", CYAN))
+        print()
+    return 0
 
-    print(f"\n  File: storage/postgres.py")
-    print(f"  Chunks extracted: {len(chunks)} in {ms:.1f}ms")
-    print(f"  Total tokens:     {total_tokens}")
-    print(f"\n  {'Line Range':<15} {'Name':<35} {'Tokens':<8}")
-    print(f"  {'-'*13:<15} {'-'*33:<35} {'-'*6:<8}")
-    for c in chunks[:8]:
-        name = c.display_name[:33]
-        tokens = count_tokens(c.content)
-        print(f"  [{c.line_start:3d}-{c.line_end:3d}]      {name:<35} {tokens:<8}")
-    if len(chunks) > 8:
-        print(f"  ... and {len(chunks)-8} more chunks")
-    print(f"\n  [OK] AST boundaries precise (no false splits, no missed functions)")
 
-    # ---------------------------------------------------------
-    # STAGE 5: CONTEXT BUNDLE ASSEMBLY
-    # ---------------------------------------------------------
-    section("STAGE 5: Context Bundle Assembly")
-
-    from context.builder import ContextBundle
-    from context.git_analyzer import GitAnalyzer
-    git = GitAnalyzer(".")
-    commits = git.get_recent_commits(days=30, max_commits=5)
-    erroring_chunk = chunks[0] if chunks else None
-
-    bundle = ContextBundle(
-        error_id="demo-attr-001",
-        erroring_file="storage/postgres.py",
-        erroring_function=erroring_chunk.display_name if erroring_chunk else "get_error",
-        erroring_code=erroring_chunk.content if erroring_chunk else "",
-        related_functions=[],
-        recent_commits=commits,
-        similar_past_bugs=[],
-        total_tokens=count_tokens(erroring_chunk.content) if erroring_chunk else 0,
-    )
-
-    print(f"\n  {bundle.summary()}")
-    print(f"\n  Erroring function: {bundle.erroring_function}")
-    print(f"  Recent commits:    {len(bundle.recent_commits)}")
-    print(f"  Context tokens:    {bundle.total_tokens}")
-    if commits:
-        print(f"  Latest commit:     [{commits[0].get('sha','')}] {commits[0].get('message','')[:50]}")
-    print(f"\n  [OK] Context assembled within 8000 token budget")
-
-    # ---------------------------------------------------------
-    # STAGE 6: DEBUGGER AGENT  (REAL LLM CALL)
-    # ---------------------------------------------------------
-    section("STAGE 6: DebuggerAgent  (Groq llama-3.3-70b-versatile  temp=0.1)")
-
-    from agents.debugger import DebuggerAgent
-    from config.llm_router import get_llm_router
-
-    llm = get_llm_router()
-    debugger = DebuggerAgent(llm_router=llm)
-
-    error_dict = {
-        "id": "demo-attr-001",
-        "error_class": "AttributeError",
-        "message": "NoneType object has no attribute get",
-        "stack_trace": raw_payload["stack_trace"],
-        "file_path": "storage/postgres.py",
-        "line_number": 44,
-        "service": "auth-service",
-        "severity": "critical",
-        "commit_sha": "3f8a1b2",
-        "branch": "feature/token-refresh",
-        "trace_id": None,
-    }
-
-    print(f"\n  Sending to Groq API...")
-    t0 = time.perf_counter()
-    root_cause = await debugger.analyze(bundle, error_dict)
-    ms = (time.perf_counter()-t0)*1000
-
-    print(f"\n  Analysis completed in {ms:.0f}ms")
-    print(f"\n  {'IMMEDIATE CAUSE'}")
-    print(f"  {root_cause.immediate_cause}")
-    print(f"\n  {'ROOT CAUSE'}")
-    print(f"  {root_cause.root_cause}")
-    if root_cause.contributing_factors:
-        print(f"\n  {'CONTRIBUTING FACTORS'}")
-        for f in root_cause.contributing_factors:
-            print(f"    - {f}")
-    print(f"\n  Confidence:      {root_cause.confidence:.0%}")
-    print(f"  Evidence quality:{root_cause.evidence_quality}")
-    print(f"  Strategy:        {root_cause.suggested_strategy}")
-    print(f"  Files to change: {root_cause.files_to_change}")
-    print(f"\n  [OK] Root cause identified with {root_cause.confidence:.0%} confidence")
-
-    # ---------------------------------------------------------
-    # STAGE 7: FIXER AGENT  (REAL LLM CALL)
-    # ---------------------------------------------------------
-    section("STAGE 7: FixerAgent  (Groq llama-3.3-70b-versatile  temp=0.15)")
-
-    from agents.fixer import FixerAgent
-    fixer = FixerAgent(llm_router=llm)
-
-    print(f"\n  Generating minimal patch for: {root_cause.files_to_change}")
-    t0 = time.perf_counter()
-    fix = await fixer.generate(root_cause, bundle, error_dict)
-    ms = (time.perf_counter()-t0)*1000
-
-    print(f"\n  Fix generated in {ms:.0f}ms")
-    print(f"  Files changed:   {fix.total_files_changed}")
-    print(f"  Lines changed:   {fix.total_lines_changed}")
-    print(f"  Regression risk: {fix.regression_risk}")
-    print(f"  Confidence:      {fix.confidence_retained:.0%}")
-    print(f"  Strategy:        {fix.strategy}")
-    print(f"\n  Explanation: {fix.fix_explanation[:120]}")
-
-    if fix.patches:
-        diff_block(fix.patches[0].unified_diff, max_lines=25)
-        print(f"\n  [OK] Unified diff generated ({fix.patches[0].lines_changed} lines changed)")
-    else:
-        print(f"\n  [NOTE] No diff generated (LLM may need more context from Qdrant)")
-
-    # ---------------------------------------------------------
-    # STAGE 8: VALIDATION ENGINE
-    # ---------------------------------------------------------
-    section("STAGE 8: ValidationEngine  (Ruff S,E9,F  +  Test Runner)")
-
-    from validation.engine import ValidationEngine
-    validator = ValidationEngine(repo_path=".")
-
-    t0 = time.perf_counter()
-    val_report = await validator.validate(fix, "demo-attr-001")
-    ms = (time.perf_counter()-t0)*1000
-
-    print(f"\n  Validation completed in {ms:.0f}ms")
-    print(f"  Overall passed:    {val_report.passed}")
-    print(f"  Blocking issues:   {len(val_report.blocking_issues)}")
-    if val_report.static_analysis:
-        sa = val_report.static_analysis
-        print(f"  Static analysis:   {sa.tool}  errors={sa.error_count}  warnings={sa.warning_count}")
-        if sa.findings:
-            print(f"  Findings:")
-            for f in sa.findings[:3]:
-                print(f"    [{f.get('code')}] line {f.get('line')}: {f.get('message')[:60]}")
-    if val_report.blocking_issues:
-        for issue in val_report.blocking_issues[:3]:
-            print(f"  BLOCKED: {issue}")
-    status = "[OK] Validation PASSED" if val_report.passed else "[WARN] Validation found issues"
-    print(f"\n  {status}")
-
-    # ---------------------------------------------------------
-    # STAGE 9: REVIEWER AGENT  (REAL LLM CALL)
-    # ---------------------------------------------------------
-    section("STAGE 9: ReviewerAgent  (Groq llama-3.3-70b-versatile  temp=0.0)")
-
-    from agents.reviewer import ReviewerAgent
-    reviewer = ReviewerAgent(llm_router=llm)
-
-    print(f"\n  Reviewing patch with strict quality checklist...")
-    t0 = time.perf_counter()
-    review = await reviewer.review(fix, root_cause, error_dict)
-    ms = (time.perf_counter()-t0)*1000
-
-    rec_color = {"approve": "\033[92m", "approve_with_comments": "\033[93m",
-                 "reject": "\033[91m"}.get(review.overall_recommendation, "")
-    reset = "\033[0m"
-
-    print(f"\n  Review completed in {ms:.0f}ms")
-    print(f"  Quality score:    {review.quality_score:.0%}")
-    print(f"  Correctness:      {'PASS' if review.correctness_passes else 'FAIL'}")
-    print(f"  Security:         {'PASS' if review.security_passes else 'FAIL'}")
-    print(f"  Recommendation:   {rec_color}{review.overall_recommendation.replace('_',' ').upper()}{reset}")
-    if review.rejection_reason:
-        print(f"  Rejection reason: {review.rejection_reason[:100]}")
-    if review.issues:
-        print(f"  Issues raised:")
-        for iss in review.issues[:3]:
-            print(f"    - {iss}")
-    print(f"\n  Notes: {review.reviewer_notes[:120]}")
-
-    auto_eligible = (
-        review.overall_recommendation == "approve"
-        and fix.confidence_retained >= 0.88
-        and fix.regression_risk == "low"
-        and val_report.passed
-    )
-    print(f"\n  Auto-merge eligible: {'YES - would be auto-resolved' if auto_eligible else 'NO - requires human review'}")
-
-    # ---------------------------------------------------------
-    # FINAL SUMMARY
-    # ---------------------------------------------------------
-    header("PHASE 1 PIPELINE OUTPUT SUMMARY")
-
-    print()
-    print(f"  INPUT:   AttributeError in auth/session.py (critical, feature branch)")
-    print(f"  SERVICE: auth-service @ commit 3f8a1b2")
-    print()
-    print(f"  {'Stage':<25} {'Result':<35} {'Time'}")
-    print(f"  {'-'*24:<25} {'-'*34:<35} {'-'*8}")
-    print(f"  {'1. Normalize':<25} {'Fingerprint + dedup hash':<35} <1ms")
-    print(f"  {'2. Classify':<25} {str(error_class_label):<35} <1ms")
-    print(f"  {'3. AST Chunk':<25} {str(len(chunks))+' functions extracted':<35} fast")
-    print(f"  {'4. Git Analyze':<25} {str(len(commits))+' recent commits':<35} fast")
-    print(f"  {'5. Context Bundle':<25} {str(bundle.total_tokens)+' tokens assembled':<35} fast")
-    print(f"  {'6. DebuggerAgent':<25} {str(root_cause.confidence*100)[:2]+'% confidence, '+root_cause.suggested_strategy:<35} LLM")
-    print(f"  {'7. FixerAgent':<25} {str(fix.total_lines_changed)+' lines changed, risk='+fix.regression_risk:<35} LLM")
-    print(f"  {'8. Validation':<25} {'PASS' if val_report.passed else 'ISSUES FOUND':<35} fast")
-    print(f"  {'9. ReviewerAgent':<25} {review.overall_recommendation.replace('_',' '):<35} LLM")
-    print()
-    print(f"  OUTCOME: {'Fix ready for human approval via Slack' if not auto_eligible else 'Auto-resolved!'}")
-    print()
-    print(f"  NOTE: With Docker running, this pipeline would additionally:")
-    print(f"    - Persist error + fix to Postgres")
-    print(f"    - Track progress in Redis")
-    print(f"    - Store embeddings in Qdrant (for future similar-bug lookup)")
-    print(f"    - Send Slack notification with Approve/Reject buttons")
-    print(f"    - Create GitHub PR draft")
-    print()
-    print("=" * 65)
-
-asyncio.run(main())
+if __name__ == "__main__":
+    sys.exit(asyncio.run(main()))

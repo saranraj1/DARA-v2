@@ -14,6 +14,7 @@ from fastapi.responses import JSONResponse
 from prometheus_fastapi_instrumentator import Instrumentator
 
 from api.middleware.logging import LoggingMiddleware
+from api.middleware.rate_limit import RateLimitMiddleware
 from api.routers import admin, auth, errors, fixes, health, metrics, traces, webhooks, events
 from api.routes.webhook_github import router as github_webhook_router
 from config.settings import get_settings
@@ -105,6 +106,11 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PATCH"],
     allow_headers=["Authorization", "Content-Type", "X-Request-ID", "X-Admin-Token", "X-Org-Id"],
 )
+# Rate limiting — applied INSIDE CORS so pre-flight OPTIONS requests are exempt.
+# Sliding window: settings.rate_limit_per_minute req/min per API key or IP.
+# Returns HTTP 429 + Retry-After header when exceeded.
+# Dev bypass: X-API-Key: dara-dev-token skips all limits.
+app.add_middleware(RateLimitMiddleware)
 
 # ── Prometheus metrics (HTTP request instrumentation) ────────
 # NB: Our metrics router already serves /metrics (Prometheus text format).

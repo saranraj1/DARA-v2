@@ -138,6 +138,9 @@ class LLMRouter:
                 ttl = cache_ttl or self._settings.llm_cache_ttl_seconds
                 await self._set_cache(cache_key, result, ttl)
 
+                # Emit cost + token metrics
+                self._emit_cost_metrics(provider_name, prompt, result)
+
                 return result
 
             except RateLimitError as e:
@@ -199,6 +202,46 @@ class LLMRouter:
         return all_vectors
 
     # ─────────────────────────── Private Helpers ─────────────
+
+    def _emit_cost_metrics(
+        self,
+        provider: str,
+        prompt: str,
+        response: str,
+    ) -> None:
+        """
+        Emit Prometheus token + cost metrics for a completed LLM call.
+        Uses tiktoken for Groq (GPT tokeniser is close enough) and
+        character-count / 4 as a fallback for Gemini.
+        """
+        try:
+            from monitoring.metrics import estimate_llm_cost_usd, llm_cost_usd_total, llm_token_batch_size, llm_tokens_total
+
+            # Best-effort token count
+            try:
+                import tiktoken
+                enc = tiktoken.get_encoding("cl100k_base")
+                prompt_tokens = len(enc.encode(prompt))
+                completion_tokens = len(enc.encode(response))
+            except Exception:
+                # Fallback: divide char count by 4 (rough approximation)
+                prompt_tokens = max(1, len(prompt) // 4)
+                completion_tokens = max(1, len(response) // 4)
+
+            llm_tokens_total.labels(provider=provider, token_type="prompt").inc(prompt_tokens)
+            llm_tokens_total.labels(provider=provider, token_type="completion").inc(completion_tokens)
+            llm_token_batch_size.labels(provider=provider).observe(prompt_tokens + completion_tokens)
+
+            cost = estimate_llm_cost_usd(provider, prompt_tokens, completion_tokens)
+            if cost > 0:
+                llm_cost_usd_total.labels(provider=provider).inc(cost)
+
+            logger.debug(
+                "LLM cost: provider=%s prompt_tokens=%d completion_tokens=%d usd=%.6f",
+                provider, prompt_tokens, completion_tokens, cost,
+            )
+        except Exception as e:
+            logger.debug("_emit_cost_metrics failed (non-blocking): %s", e)
 
     def _get_provider_chain(self, priority: str) -> list[str]:
         chains: dict[str, list[str]] = {

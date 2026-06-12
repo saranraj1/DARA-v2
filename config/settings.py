@@ -9,7 +9,7 @@ import secrets
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import AnyHttpUrl, Field, computed_field, field_validator
+from pydantic import AnyHttpUrl, Field, computed_field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -71,6 +71,29 @@ class GitHubSettings(BaseSettings):
     )
     github_webhook_secret: str = Field(..., description="GitHub webhook HMAC secret")
     github_installation_id: str = Field(..., description="GitHub App installation ID")
+    github_org: str = Field(
+        default="",
+        description="Default GitHub organisation for repo routing (e.g. 'my-company')",
+    )
+    known_github_repos: str = Field(
+        default="{}",
+        description=(
+            'JSON map of service_name -> repo_full_name for multi-repo routing. '
+            'Example: \'{"auth-service": "my-org/auth", "api": "my-org/api"}\' '
+            'Overrides the default {github_org}/{service_name} routing.'
+        ),
+    )
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def known_repos_map(self) -> dict[str, str]:
+        """Parse KNOWN_GITHUB_REPOS JSON into a usable dict."""
+        import json as _json
+        try:
+            parsed = _json.loads(self.known_github_repos)
+            return parsed if isinstance(parsed, dict) else {}
+        except (ValueError, TypeError):
+            return {}
 
     @computed_field  # type: ignore[prop-decorator]
     @property
@@ -139,7 +162,11 @@ class PipelineSettings(BaseSettings):
         default=0.88,
         ge=0.0,
         le=1.0,
-        description="Minimum confidence to be eligible for auto-merge",
+        description=(
+            "Minimum confidence score [0–1] for a fix to be auto-merged without human review. "
+            "Default 0.88 is a conservative starting baseline — see docs/confidence_threshold.md "
+            "for the calibration methodology and how to tune for your team's risk tolerance."
+        ),
     )
     max_context_tokens: int = Field(default=8000, ge=1000, le=32000)
     max_pipeline_retries: int = Field(default=3, ge=1, le=10)
@@ -247,6 +274,62 @@ class Settings(
     @property
     def is_production(self) -> bool:
         return self.environment == "production"
+
+    @model_validator(mode="after")
+    def _validate_required_secrets(self) -> "Settings":
+        """
+        Fail immediately on startup with a clear, actionable message if any
+        required secret is missing. Much better than a cryptic AttributeError
+        deep in the call stack 10 seconds later.
+        """
+        errors: list[str] = []
+
+        # LLM: need Groq key unless running local Ollama
+        if self.llm_mode != "local" and not self.groq_api_key:
+            errors.append(
+                "GROQ_API_KEY is required when LLM_MODE != 'local' — "
+                "get a free key at console.groq.com"
+            )
+
+        # GitHub App credentials
+        if not self.github_app_id:
+            errors.append(
+                "GITHUB_APP_ID is required — see github.com/settings/apps "
+                "and docs in .env.example"
+            )
+        if not self.github_webhook_secret:
+            errors.append(
+                "GITHUB_WEBHOOK_SECRET is required — set this to the random string "
+                "you configured in the GitHub App webhook settings"
+            )
+        if not self.github_installation_id:
+            errors.append(
+                "GITHUB_INSTALLATION_ID is required — find it at "
+                "github.com/settings/installations/XXXXX"
+            )
+
+        # Slack
+        if not self.slack_bot_token:
+            errors.append(
+                "SLACK_BOT_TOKEN is required — get it from api.slack.com "
+                "→ your app → OAuth tokens (must start with xoxb-)"
+            )
+        if not self.slack_signing_secret:
+            errors.append(
+                "SLACK_SIGNING_SECRET is required — find it in api.slack.com "
+                "→ your app → Basic Info"
+            )
+
+        if errors:
+            lines = "\n  ".join(f"• {e}" for e in errors)
+            raise ValueError(
+                f"\n\nDARA startup failed — missing required configuration:\n"
+                f"  {lines}\n\n"
+                f"Copy .env.example to .env and fill in the missing values.\n"
+                f"Run 'python scripts/validate_env.py' for an interactive check.\n"
+            )
+
+        return self
 
 
 @lru_cache(maxsize=1)

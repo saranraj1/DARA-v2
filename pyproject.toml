@@ -2,7 +2,7 @@
 name = "dara"
 version = "0.1.0"
 description = "DARA — Distributed Architecture Root-cause Agent"
-authors = ["DARA Team"]
+authors = ["Saranraj <saran17102005@gmail.com>"]
 readme = "README.md"
 
 [tool.poetry.dependencies]
@@ -44,6 +44,9 @@ google-generativeai = ">=0.7.0"
 sentence-transformers = ">=2.7.0"
 tiktoken = ">=0.7.0"
 torch = {version = ">=2.0.0", optional = true}
+
+[tool.poetry.extras]
+gpu = ["torch"]   # Install with: poetry install --extras gpu
 
 # --- Code Intelligence ---
 tree-sitter = ">=0.21.0"
@@ -113,7 +116,7 @@ ignore = ["E501"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
-addopts = "--cov=. --cov-config=.coveragerc --cov-report=term-missing:skip-covered --cov-fail-under=30 --ignore=tests/test_e2e_smoke.py --ignore=tests/test_context.py"
+addopts = "--cov=. --cov-config=.coveragerc --cov-report=term-missing:skip-covered --cov-report=xml:coverage.xml --cov-fail-under=70 --ignore=tests/test_e2e_smoke.py --ignore=tests/test_context.py"
 filterwarnings = [
     "ignore::DeprecationWarning:asttokens",
     "ignore:coroutine.*was never awaited:RuntimeWarning",

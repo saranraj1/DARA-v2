@@ -155,3 +155,70 @@ fine_tuning_triples = Counter(
     'dara_fine_tuning_triples_total',
     'Training triples exported to MinIO',
 )
+
+# ── LLM Cost Tracking (Item 15) ───────────────────────────────────────────────
+#
+# Track token usage and estimated USD cost per LLM provider.
+# Emit these metrics by calling:
+#
+#   from monitoring import metrics
+#   metrics.llm_tokens_total.labels(provider="groq", token_type="prompt").inc(prompt_tokens)
+#   metrics.llm_tokens_total.labels(provider="groq", token_type="completion").inc(completion_tokens)
+#   metrics.llm_cost_usd_total.labels(provider="groq").inc(estimated_usd)
+#
+# Pricing reference (update when provider prices change):
+#   Groq:        $0.05 / 1M input tokens,  $0.08 / 1M output tokens
+#   Gemini Flash: $0.075 / 1M input,       $0.30  / 1M output
+#   Gemini Pro:   $3.50  / 1M input,       $10.50 / 1M output
+#   Ollama:       $0.00  (local)
+#
+# Grafana dashboard query:
+#   sum(rate(dara_llm_estimated_cost_usd_total[24h])) by (provider)
+#   sum(dara_llm_tokens_total) by (provider, token_type)
+
+llm_tokens_total = Counter(
+    "dara_llm_tokens_total",
+    "Total LLM tokens processed, labelled by provider and token type (prompt/completion)",
+    ["provider", "token_type"],   # token_type: prompt | completion
+)
+
+llm_cost_usd_total = Counter(
+    "dara_llm_estimated_cost_usd_total",
+    "Estimated total LLM cost in USD based on provider pricing at time of request",
+    ["provider"],
+)
+
+llm_token_batch_size = Histogram(
+    "dara_llm_token_batch_size",
+    "Distribution of LLM request sizes in tokens (prompt + completion)",
+    ["provider"],
+    buckets=[128, 256, 512, 1024, 2048, 4096, 8192, 16384],
+)
+
+# ── Per-provider USD pricing constants (per 1M tokens) ───────────────────────
+# Used by llm_router.py to compute estimated cost before emitting metrics.
+LLM_PRICING_USD_PER_1M = {
+    # (input_price, output_price)
+    "groq":          (0.05,  0.08),
+    "gemini_flash":  (0.075, 0.30),
+    "gemini_pro":    (3.50, 10.50),
+    "ollama":        (0.00,  0.00),   # local, no cost
+}
+
+
+def estimate_llm_cost_usd(
+    provider: str,
+    prompt_tokens: int,
+    completion_tokens: int,
+) -> float:
+    """
+    Compute estimated USD cost for an LLM call.
+    Uses LLM_PRICING_USD_PER_1M pricing table.
+    Returns 0.0 if provider is unknown.
+    """
+    input_price, output_price = LLM_PRICING_USD_PER_1M.get(provider, (0.0, 0.0))
+    return (
+        prompt_tokens / 1_000_000 * input_price
+        + completion_tokens / 1_000_000 * output_price
+    )
+

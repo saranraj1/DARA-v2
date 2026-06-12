@@ -1,0 +1,196 @@
+name: DARA CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+# Cancel in-progress runs for the same branch
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: "3.11"
+
+jobs:
+  # ────────────────────────────────────────────────────────────────
+  # Job 1: Lint (ruff)
+  # ────────────────────────────────────────────────────────────────
+  lint:
+    name: "Lint (ruff)"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install ruff
+        run: pip install ruff>=0.4.0
+
+      - name: Run ruff check
+        run: ruff check . --output-format=github
+
+      - name: Run ruff format check
+        run: ruff format --check .
+
+  # ────────────────────────────────────────────────────────────────
+  # Job 2: Unit Tests (no infra required)
+  # ────────────────────────────────────────────────────────────────
+  unit-tests:
+    name: "Unit Tests (coverage ≥70%)"
+    runs-on: ubuntu-latest
+    needs: lint
+    env:
+      # Provide stub values so Settings validation passes
+      GROQ_API_KEY:              ${{ secrets.GROQ_API_KEY }}
+      GOOGLE_API_KEY:            "stub-google-key"
+      GITHUB_APP_ID:             "12345"
+      GITHUB_WEBHOOK_SECRET:     "stub-webhook-secret"
+      GITHUB_INSTALLATION_ID:    "67890"
+      SLACK_BOT_TOKEN:           "xoxb-stub-slack-token"
+      SLACK_SIGNING_SECRET:      "stub-slack-secret"
+      LLM_MODE:                  "groq"
+      ENVIRONMENT:               "development"
+      # Databases — not running in unit tests, clients mock-patched
+      POSTGRES_URL:              "postgresql+asyncpg://dara:dara_dev@localhost:5432/dara"
+      REDIS_URL:                 "redis://:dara_dev@localhost:6379/0"
+      QDRANT_URL:                "http://localhost:6333"
+      NEO4J_URI:                 "bolt://localhost:7687"
+      NEO4J_USER:                "neo4j"
+      NEO4J_PASSWORD:            "dara_dev"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install Poetry
+        run: pip install poetry>=1.8.0
+
+      - name: Configure Poetry (no virtual env in CI)
+        run: poetry config virtualenvs.create false
+
+      - name: Install dependencies
+        run: poetry install --no-interaction --no-root
+
+      - name: Run unit tests with coverage
+        run: |
+          poetry run pytest \
+            --cov=. \
+            --cov-config=.coveragerc \
+            --cov-report=term-missing:skip-covered \
+            --cov-report=xml:coverage.xml \
+            --cov-fail-under=70 \
+            --ignore=tests/test_e2e_smoke.py \
+            --ignore=tests/test_context.py \
+            -v \
+            -x
+
+      - name: Upload coverage to Codecov
+        if: always()
+        uses: codecov/codecov-action@v4
+        with:
+          files: coverage.xml
+          fail_ci_if_error: false
+          token: ${{ secrets.CODECOV_TOKEN }}
+
+  # ────────────────────────────────────────────────────────────────
+  # Job 3: Demo smoke test (light mode — no infra)
+  # ────────────────────────────────────────────────────────────────
+  demo-smoke:
+    name: "Demo Smoke (light mode)"
+    runs-on: ubuntu-latest
+    needs: unit-tests
+    # Only run if GROQ_API_KEY secret is available
+    if: ${{ secrets.GROQ_API_KEY != '' }}
+    env:
+      GROQ_API_KEY:              ${{ secrets.GROQ_API_KEY }}
+      GOOGLE_API_KEY:            "stub-google-key"
+      GITHUB_APP_ID:             "12345"
+      GITHUB_WEBHOOK_SECRET:     "stub-webhook-secret"
+      GITHUB_INSTALLATION_ID:    "67890"
+      SLACK_BOT_TOKEN:           "xoxb-stub-slack-token"
+      SLACK_SIGNING_SECRET:      "stub-slack-secret"
+      LLM_MODE:                  "groq"
+      ENVIRONMENT:               "development"
+      POSTGRES_URL:              "postgresql+asyncpg://dara:dara_dev@localhost:5432/dara"
+      REDIS_URL:                 "redis://:dara_dev@localhost:6379/0"
+      QDRANT_URL:                "http://localhost:6333"
+      NEO4J_URI:                 "bolt://localhost:7687"
+      NEO4J_USER:                "neo4j"
+      NEO4J_PASSWORD:            "dara_dev"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install Poetry
+        run: pip install poetry>=1.8.0
+
+      - name: Configure Poetry
+        run: poetry config virtualenvs.create false
+
+      - name: Install dependencies
+        run: poetry install --no-interaction --no-root
+
+      - name: Run demo in light mode (no infra)
+        run: poetry run python run_demo.py --light
+        timeout-minutes: 5
+
+  # ────────────────────────────────────────────────────────────────
+  # Job 4: Env validation check
+  # ────────────────────────────────────────────────────────────────
+  env-validation:
+    name: "Env Validation Script"
+    runs-on: ubuntu-latest
+    needs: lint
+    env:
+      GROQ_API_KEY:              ${{ secrets.GROQ_API_KEY }}
+      GOOGLE_API_KEY:            "stub-google-key"
+      GITHUB_APP_ID:             "12345"
+      GITHUB_WEBHOOK_SECRET:     "stub-webhook-secret"
+      GITHUB_INSTALLATION_ID:    "67890"
+      SLACK_BOT_TOKEN:           "xoxb-stub-slack-token"
+      SLACK_SIGNING_SECRET:      "stub-slack-secret"
+      LLM_MODE:                  "groq"
+      ENVIRONMENT:               "development"
+      POSTGRES_URL:              "postgresql+asyncpg://dara:dara_dev@localhost:5432/dara"
+      REDIS_URL:                 "redis://:dara_dev@localhost:6379/0"
+      QDRANT_URL:                "http://localhost:6333"
+      NEO4J_URI:                 "bolt://localhost:7687"
+      NEO4J_USER:                "neo4j"
+      NEO4J_PASSWORD:            "dara_dev"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install Poetry
+        run: pip install poetry>=1.8.0
+
+      - name: Configure Poetry
+        run: poetry config virtualenvs.create false
+
+      - name: Install dependencies
+        run: poetry install --no-interaction --no-root
+
+      - name: Run env validation
+        run: poetry run python scripts/validate_env.py --ci

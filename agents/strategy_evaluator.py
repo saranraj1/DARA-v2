@@ -64,17 +64,35 @@ class StrategyEvaluator:
     """
     A/B test runner for strategy variants.
     Uses Wilson score intervals for statistically sound winner declaration.
+
+    RLHF Integration (Item 13 — Full Replacement):
+    select_strategy_with_feedback() is the primary entry point for the
+    Orchestrator.  It calls StrategyMonitor.compute_strategy_win_rates()
+    to fetch real human feedback, then re-ranks available strategies so
+    that historically successful strategies are preferred.
+
+    The re-ranking algorithm:
+      - Base score: pattern library confidence (0–1)
+      - Feedback boost: wilson_lower * FEEDBACK_WEIGHT (if reliable data exists)
+      - Final score = base_score + boost (clamped to [0, 1])
+      - Strategy with highest final score is selected
+
+    This means every human approve/reject on a Slack notification feeds
+    back into strategy selection within 30 days of Postgres data.
     """
 
     MIN_CASES: int = 10
     CONFIDENCE_THRESHOLD: float = 0.80   # Must be 80%+ confident to auto-promote
     Z_95: float = 1.96                   # z-score for 95% CI
+    FEEDBACK_WEIGHT: float = 0.30        # How much feedback can shift the score (max ±0.30)
 
     def __init__(self, fixer_agent=None, reviewer_agent=None, neo4j=None, postgres=None) -> None:
         self._fixer = fixer_agent
         self._reviewer = reviewer_agent
         self._neo4j = neo4j
         self._postgres = postgres
+        # Lazy-imported to avoid circular dependency
+        self._monitor: object | None = None
 
     def _get_pg(self):
         if self._postgres:
@@ -91,7 +109,97 @@ class StrategyEvaluator:
         except Exception:
             return None
 
-    # ── Public API ─────────────────────────────────────────────
+    def _get_monitor(self):
+        """Lazy-load StrategyMonitor to avoid circular imports."""
+        if self._monitor is None:
+            from agents.strategy_monitor import StrategyMonitor
+            self._monitor = StrategyMonitor(
+                neo4j=self._neo4j,
+                postgres=self._postgres,
+            )
+        return self._monitor
+
+    # ── RLHF-driven strategy selection (primary entry point) ─────────────
+
+    async def select_strategy_with_feedback(
+        self,
+        candidates: list[str],
+        error_class: str,
+        base_scores: dict[str, float] | None = None,
+    ) -> tuple[str, dict[str, float]]:
+        """
+        Select the best strategy from candidates using feedback-augmented scoring.
+
+        This is the RLHF selection loop:
+          1. Get base score from pattern library confidence (or uniform 0.5 default)
+          2. Fetch win rates from StrategyMonitor (reads real Postgres feedback)
+          3. Boost strategies whose Wilson lower bound shows reliable acceptance
+          4. Penalise strategies with poor feedback history
+          5. Return the highest-scoring strategy and the full score table
+
+        Args:
+            candidates:   List of strategy names to rank
+            error_class:  Error class to filter feedback (e.g. 'AttributeError')
+            base_scores:  Optional pre-computed base scores from pattern library
+
+        Returns:
+            (selected_strategy, score_table) where score_table maps
+            strategy_name -> final_score for explainability.
+        """
+        if not candidates:
+            return "llm_single_file", {}
+
+        # Start with base scores (default: 0.5 uniform)
+        scores: dict[str, float] = {
+            s: (base_scores or {}).get(s, 0.5) for s in candidates
+        }
+
+        # Fetch real feedback win rates
+        monitor = self._get_monitor()
+        try:
+            win_rates = await monitor.compute_strategy_win_rates(
+                error_class=error_class, lookback_days=30
+            )
+            win_rate_map = {wr.strategy: wr for wr in win_rates}
+        except Exception as e:
+            logger.warning("select_strategy_with_feedback: monitor unavailable: %s", e)
+            win_rate_map = {}
+
+        # Apply feedback boost / penalty
+        for strategy in candidates:
+            wr = win_rate_map.get(strategy)
+            if wr is None:
+                # No feedback for this strategy yet — no change to base score
+                continue
+
+            if wr.is_reliable:
+                # Reliable data: use Wilson lower bound as a direct signal.
+                # wilson_lower > 0.7 → boost by up to FEEDBACK_WEIGHT
+                # wilson_lower < 0.5 → penalise by up to FEEDBACK_WEIGHT
+                delta = (wr.wilson_lower - 0.5) * 2 * self.FEEDBACK_WEIGHT
+            else:
+                # Unreliable data (< 10 samples): half-weight to avoid over-fitting
+                delta = (wr.raw_win_rate - 0.5) * self.FEEDBACK_WEIGHT
+
+            scores[strategy] = max(0.0, min(1.0, scores[strategy] + delta))
+            logger.debug(
+                "RLHF score: strategy=%s base=%.2f delta=%.2f final=%.2f "
+                "(n=%d wilson_lower=%.2f reliable=%s)",
+                strategy, (base_scores or {}).get(strategy, 0.5),
+                delta, scores[strategy],
+                wr.total, wr.wilson_lower, wr.is_reliable,
+            )
+
+        # Select highest-scoring strategy
+        selected = max(scores, key=lambda s: scores[s])
+        logger.info(
+            "StrategyEvaluator: selected strategy=%s score=%.2f "
+            "(feedback strategies in map: %d)",
+            selected, scores[selected], len(win_rate_map),
+        )
+        return selected, scores
+
+    # ── Public API (A/B testing) ──────────────────────────────────
 
     async def run_ab_test(
         self,

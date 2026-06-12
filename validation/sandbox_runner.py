@@ -178,6 +178,19 @@ class SandboxRunner:
             .with_volume_mapping(sandbox_dir, CONTAINER_WORKDIR, "rw")
             .with_env("PYTHONPATH", CONTAINER_WORKDIR)
             .with_command(" ".join(PYTEST_CMD))
+            # ── Security & resource isolation ──────────────────────────────
+            # Block all outbound network traffic — patches must not phone home
+            .with_kwargs(network_mode="none")
+            # Hard cap: 512 MB RAM, 0.5 CPU core
+            # Prevents a malicious or runaway patch from exhausting the host
+            .with_kwargs(mem_limit="512m", nano_cpus=500_000_000)
+            # Drop all Linux capabilities — minimal attack surface
+            .with_kwargs(cap_drop=["ALL"])
+            # Prevent privilege escalation inside container
+            .with_kwargs(security_opt=["no-new-privileges:true"])
+            # Container is automatically removed by testcontainers context manager;
+            # auto_remove=True ensures cleanup even on exception paths
+            .with_kwargs(auto_remove=True)
         ) as container:
             exit_info = container.get_wrapped_container().wait()
             exit_code = exit_info.get("StatusCode", 1)

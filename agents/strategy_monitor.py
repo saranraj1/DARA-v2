@@ -15,19 +15,64 @@ Data sources (dual-source for accuracy):
 
 FailingClass dataclass carries all context the StrategyGenerator needs.
 
+RLHF Feedback Loop (Item 13):
+  compute_strategy_win_rates() reads human feedback (accepted/rejected/modified
+  outcomes stored in pipeline_runs.outcome) and computes a Wilson-score
+  win-rate table keyed by strategy name.  StrategyEvaluator.select_strategy()
+  reads this table on every pipeline run and boosts the score of strategies
+  with a statistically proven high acceptance rate.
+
+  This means: EVERY human approve/reject action on a Slack notification
+  feeds directly back into which strategy the system chooses next time it
+  sees a similar error class.  That is the RLHF claim made good.
+
 Usage (hourly Celery beat):
     monitor = StrategyMonitor(neo4j=..., postgres=...)
     failing = await monitor.scan()
     for fc in failing:
         await monitor.flag_for_refresh(fc)
+
+    # Called by StrategyEvaluator on every pipeline run:
+    win_rates = await monitor.compute_strategy_win_rates()
 """
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class StrategyWinRate:
+    """
+    Per-strategy acceptance statistics derived from real human feedback.
+    Populated by compute_strategy_win_rates() and consumed by StrategyEvaluator.
+
+    wilson_lower is the key metric: it's the conservative lower bound of the
+    true win rate with 95% confidence.  Using the lower bound (rather than the
+    raw rate) penalises strategies with few samples, preventing premature
+    promotion of lucky-once strategies.
+    """
+    strategy: str
+    accepted: int
+    rejected: int
+    total: int
+    raw_win_rate: float          # accepted / total
+    wilson_lower: float          # conservative 95% CI lower bound
+    wilson_upper: float
+    is_reliable: bool            # True when total >= MIN_RELIABLE_SAMPLES
+
+    @property
+    def summary(self) -> str:
+        return (
+            f"[{self.strategy}] win={self.raw_win_rate:.0%} "
+            f"(Wilson lower={self.wilson_lower:.0%}) "
+            f"n={self.total} reliable={self.is_reliable}"
+        )
+
 
 
 @dataclass
@@ -67,6 +112,8 @@ class StrategyMonitor:
 
     FAILURE_THRESHOLD: float = 0.40   # 40% rejection rate
     MIN_SAMPLES: int = 5              # Min cases before judging a class
+    MIN_RELIABLE_SAMPLES: int = 10    # Min cases before a win-rate is considered reliable
+    Z_95: float = 1.96               # z-score for 95% confidence interval
 
     def __init__(self, neo4j=None, postgres=None) -> None:
         self._neo4j = neo4j
@@ -88,6 +135,114 @@ class StrategyMonitor:
         return get_postgres()
 
     # ── Public API ─────────────────────────────────────────────
+
+    async def compute_strategy_win_rates(
+        self,
+        lookback_days: int = 30,
+        error_class: str | None = None,
+    ) -> list[StrategyWinRate]:
+        """
+        Compute per-strategy acceptance rates from real human feedback stored
+        in pipeline_runs.outcome.  This is the core RLHF feedback loop:
+
+          Human approves/rejects fix on Slack
+            → outcome written to pipeline_runs (via RLHF feedback endpoint)
+            → this method aggregates those outcomes per strategy
+            → StrategyEvaluator reads win rates and boosts winning strategies
+            → system selects better strategies on next pipeline run
+
+        Returns a list of StrategyWinRate sorted by wilson_lower descending
+        (best strategies first).
+
+        Falls back gracefully to an empty list if Postgres is unavailable,
+        so the strategy evaluator can still proceed without crashing.
+        """
+        try:
+            from sqlalchemy import text
+            pg = self._get_pg()
+
+            # Build the query — optionally filter by error_class
+            where_class = "AND e.error_class = :error_class" if error_class else ""
+            sql = text(f"""
+                SELECT
+                    pr.strategy,
+                    COUNT(*) FILTER (
+                        WHERE pr.outcome IN ('accepted', 'auto_accepted', 'modified')
+                    ) AS accepted,
+                    COUNT(*) FILTER (
+                        WHERE pr.outcome IN ('rejected')
+                    ) AS rejected,
+                    COUNT(*) AS total
+                FROM pipeline_runs pr
+                JOIN errors e ON e.id = pr.error_id
+                WHERE pr.outcome IS NOT NULL
+                  AND pr.strategy IS NOT NULL
+                  AND pr.started_at > NOW() - INTERVAL '{lookback_days} days'
+                  {where_class}
+                GROUP BY pr.strategy
+                HAVING COUNT(*) >= :min_samples
+                ORDER BY
+                    COUNT(*) FILTER (
+                        WHERE pr.outcome IN ('accepted', 'auto_accepted', 'modified')
+                    )::float / NULLIF(COUNT(*), 0) DESC
+            """)
+
+            params: dict = {"min_samples": self.MIN_SAMPLES}
+            if error_class:
+                params["error_class"] = error_class
+
+            async with pg.session() as sess:
+                rows = (await sess.execute(sql, params)).all()
+
+            results: list[StrategyWinRate] = []
+            for row in rows:
+                strategy, accepted, rejected, total = row
+                if total == 0:
+                    continue
+                accepted = accepted or 0
+                rejected = rejected or 0
+                raw_rate = accepted / total
+                lower, upper = self._wilson_interval(accepted, total)
+                results.append(StrategyWinRate(
+                    strategy=strategy,
+                    accepted=accepted,
+                    rejected=rejected,
+                    total=total,
+                    raw_win_rate=round(raw_rate, 4),
+                    wilson_lower=round(lower, 4),
+                    wilson_upper=round(upper, 4),
+                    is_reliable=(total >= self.MIN_RELIABLE_SAMPLES),
+                ))
+
+            # Sort by Wilson lower bound descending: best first
+            results.sort(key=lambda r: r.wilson_lower, reverse=True)
+
+            logger.info(
+                "StrategyMonitor.compute_strategy_win_rates: %d strategies tracked "
+                "(%d days, class=%s)",
+                len(results), lookback_days, error_class or "all",
+            )
+            for r in results:
+                logger.debug("  %s", r.summary)
+
+            return results
+
+        except Exception as e:
+            logger.warning("compute_strategy_win_rates failed (non-blocking): %s", e)
+            return []
+
+    def _wilson_interval(self, successes: int, total: int) -> tuple[float, float]:
+        """Wilson score 95% CI. More accurate than normal approximation."""
+        if total == 0:
+            return 0.0, 1.0
+        z = self.Z_95
+        p_hat = successes / total
+        denom = 1 + z ** 2 / total
+        centre = (p_hat + z ** 2 / (2 * total)) / denom
+        margin = (
+            z * math.sqrt(p_hat * (1 - p_hat) / total + z ** 2 / (4 * total ** 2))
+        ) / denom
+        return max(0.0, centre - margin), min(1.0, centre + margin)
 
     async def scan(self) -> list[FailingClass]:
         """
