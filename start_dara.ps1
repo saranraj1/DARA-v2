@@ -98,7 +98,7 @@ Write-Host "► Starting Vite frontend..." -ForegroundColor Yellow
 $frontend = Start-Process powershell -ArgumentList @(
     "-NoExit",
     "-Command",
-    "Set-Location '$ROOT\artisan-admin'; Write-Host 'DARA Frontend' -ForegroundColor Cyan; npm run dev"
+    "Set-Location '$ROOT\admin_ui'; Write-Host 'DARA Frontend' -ForegroundColor Cyan; npm run dev"
 ) -PassThru
 
 Start-Sleep 5
