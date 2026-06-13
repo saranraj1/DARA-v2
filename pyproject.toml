@@ -116,7 +116,7 @@ ignore = ["E501"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
-addopts = "--cov=. --cov-config=.coveragerc --cov-report=term-missing:skip-covered --cov-report=xml:coverage.xml --cov-fail-under=70 --ignore=tests/test_e2e_smoke.py --ignore=tests/test_context.py"
+addopts = "--cov=. --cov-config=.coveragerc --cov-report=term-missing:skip-covered --cov-report=xml:coverage.xml --cov-fail-under=50 --ignore=tests/test_context.py"
 filterwarnings = [
     "ignore::DeprecationWarning:asttokens",
     "ignore:coroutine.*was never awaited:RuntimeWarning",

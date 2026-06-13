@@ -65,6 +65,7 @@ def _validation(passed=True, issues=None):
     v.blocking_issues = issues or []
     v.test_results = None
     v.total_duration_ms = 850
+    v.final_fix = None
     return v
 
 

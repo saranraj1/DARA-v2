@@ -104,6 +104,18 @@ DARA is designed to handle **polyglot codebases** (Python, Go, TypeScript), inte
 
 ---
 
+## 🖥️ React Admin Console
+
+DARA includes a high-fidelity React-based administration console ([artisan-admin](file:///c:/Production%20level%20projects/ADAA/artisan-admin)) that acts as the Human-in-the-Loop (HITL) command center:
+
+*   **RCA Pipeline Dashboard**: Monitors real-time pipeline KPIs (total errors, fixes, win rates), throughput logs, and error frequencies.
+*   **Ingestion Log**: Streams live exceptions from your web servers, background workers, or OTel hooks, complete with detailed stack traces, environment tags, and git commits.
+*   **HITL Patch Queue**: Review AI-generated diffs side-by-side. Approve fixes to auto-merge and open a GitHub PR, or reject them with feedback.
+*   **OTel Topology Call Graph**: Renders an interactive 2D graph of your microservices' live dependencies, status rates, and traces.
+*   **Immutable Audit Trail**: Tracks every reviewer approval or rejection decision.
+
+---
+
 ## 🚀 Quick Start
 
 ### Prerequisites
@@ -148,8 +160,14 @@ docker compose -f docker-compose.dev.yml ps
 
 ### 4. Install Python Dependencies
 
+By default, DARA installs lightweight dependencies for CPU-based embedding execution. If you plan to run `sentence-transformers` on a GPU, install the optional `torch` dependency using the `gpu` extra:
+
 ```bash
+# Standard installation (CPU)
 poetry install
+
+# GPU-accelerated installation (includes PyTorch)
+poetry install --extras gpu
 ```
 
 ### 5. Run Database Migrations
@@ -550,7 +568,7 @@ poetry run ruff format .
 - [ ] **PagerDuty Integration** — Automatic incident creation for critical escalations
 - [ ] **JIRA Integration** — Ticket creation and tracking for escalated bugs
 - [ ] **Custom Strategy Plugins** — Plugin interface for domain-specific fix strategies
-- [ ] **Web Dashboard** — React-based admin UI for pipeline monitoring
+- [x] **Web Dashboard** — React-based admin UI for pipeline monitoring
 
 ---
 

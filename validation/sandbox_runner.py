@@ -234,7 +234,7 @@ class SandboxRunner:
     def _prepare_sandbox(self, sandbox_dir: str, fix: Fix) -> None:
         """Copy repo into sandbox_dir and apply patches (file-content replacement)."""
         sb = Path(sandbox_dir)
-        SKIP = {".git", "__pycache__", ".venv", "node_modules", ".mypy_cache", "admin_ui"}
+        SKIP = {".git", "__pycache__", ".venv", "node_modules", ".mypy_cache", "admin_ui", "artisan-admin"}
         for item in self.repo_path.iterdir():
             if item.name in SKIP:
                 continue
