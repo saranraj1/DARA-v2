@@ -212,7 +212,7 @@ async def main():
     if failed == 0:
         print("\nPHASE 1 E2E: ALL TESTS PASSED")
     else:
-        print(f"\nFAILED: {failed} tests � check Docker stack and API server")
+        print(f"\nFAILED: {failed} tests - check Docker stack and API server")
         sys.exit(1)
 
 asyncio.run(main())

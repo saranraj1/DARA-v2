@@ -27,7 +27,7 @@ class DebuggerAgent:
     async def analyze(self, bundle: ContextBundle, error: dict) -> RootCauseResult:
         prompt = self._build_prompt(bundle, error)
         logger.info("DebuggerAgent: prompt=%d tokens error_id=%s",
-                    count_tokens(prompt), error.get("id","")[:8])
+                    count_tokens(prompt), (error.get("id") or "")[:8])
         raw = await self._llm.complete(
             prompt=prompt,
             system="You are a software debugger. Output ONLY valid JSON. No markdown fences.",
@@ -80,15 +80,15 @@ class DebuggerAgent:
             )
 
         return (self._prompt_template
-            .replace("{{error_class}}", error.get("error_class",""))
-            .replace("{{message}}", error.get("message","")[:500])
-            .replace("{{service}}", error.get("service","unknown"))
-            .replace("{{severity}}", error.get("severity","medium"))
-            .replace("{{commit_sha}}", error.get("commit_sha","unknown"))
-            .replace("{{branch}}", error.get("branch","unknown"))
-            .replace("{{stack_trace}}", (error.get("stack_trace","No stack trace") or "")[:2000])
+            .replace("{{error_class}}", error.get("error_class") or "")
+            .replace("{{message}}", (error.get("message") or "")[:500])
+            .replace("{{service}}", error.get("service") or "unknown")
+            .replace("{{severity}}", error.get("severity") or "medium")
+            .replace("{{commit_sha}}", error.get("commit_sha") or "unknown")
+            .replace("{{branch}}", error.get("branch") or "unknown")
+            .replace("{{stack_trace}}", (error.get("stack_trace") or "No stack trace")[:2000])
             .replace("{{file_path}}", bundle.erroring_file or "unknown")
-            .replace("{{line_number}}", str(error.get("line_number","?")))
+            .replace("{{line_number}}", str(error.get("line_number") or "?"))
             .replace("{{erroring_code}}", (bundle.erroring_code or "Not available")[:1500])
             .replace("{{related_functions}}", related or "None found")
             .replace("{{recent_commits}}", commits or "No recent commits")
