@@ -241,6 +241,55 @@ class PostgresClient:
                 elif status == "failed":
                     run.completed_at = datetime.now(timezone.utc)
 
+    async def record_pipeline_run_completion(
+        self,
+        error_id: str,
+        status: str,
+        stage_reached: str | None = None,
+        stages_completed: list[str] | None = None,
+        sandbox_iterations: int = 0,
+        security_retries: int = 0,
+        escalation_trigger: str | None = None,
+        error_message: str | None = None,
+    ) -> str:
+        async with self.session() as sess:
+            result = await sess.execute(
+                select(PipelineRun)
+                .where(PipelineRun.error_id == uuid.UUID(error_id))
+                .order_by(PipelineRun.started_at.desc())
+                .limit(1)
+            )
+            run = result.scalar_one_or_none()
+            if not run:
+                run = PipelineRun(
+                    error_id=uuid.UUID(error_id),
+                    status=status,
+                    stages_completed=stages_completed or [],
+                )
+                sess.add(run)
+
+            run.status = status
+            run.current_stage = stage_reached
+            if stages_completed is not None:
+                run.stages_completed = stages_completed
+            run.sandbox_iterations = sandbox_iterations
+            run.security_retries = security_retries
+            run.escalation_trigger = escalation_trigger
+            run.error_message = error_message
+            run.completed_at = datetime.now(timezone.utc)
+            await sess.flush()
+            return str(run.id)
+
+    async def get_latest_pipeline_run(self, error_id: str) -> PipelineRun | None:
+        async with self.session() as sess:
+            result = await sess.execute(
+                select(PipelineRun)
+                .where(PipelineRun.error_id == uuid.UUID(error_id))
+                .order_by(PipelineRun.started_at.desc())
+                .limit(1)
+            )
+            return result.scalar_one_or_none()
+
     # ─── Pattern Library ─────────────────────────────────────
 
     async def get_fix_template(

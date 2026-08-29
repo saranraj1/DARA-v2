@@ -79,6 +79,8 @@ class PipelineResult:
     security_findings: list[str] = field(default_factory=list)
     blast_risk: str = "low"
     blast_downstream_count: int = 0
+    escalation_trigger: str | None = None
+    stages_completed: list[str] = field(default_factory=list)
 
 
 class Orchestrator:
@@ -122,6 +124,7 @@ class Orchestrator:
             r = await self._run_pipeline(result)
             metrics.pipelines_total.labels(status=r.status).inc()
             metrics.pipeline_duration.observe(time.perf_counter() - _t0)
+            await self._persist_run_metrics(r)
             return r
         except Exception as e:
             logger.error("Orchestrator fatal error for %s: %s", error_id, e, exc_info=True)
@@ -130,9 +133,25 @@ class Orchestrator:
             await self._set_state(error_id, "failed")
             metrics.pipelines_total.labels(status="failed").inc()
             metrics.pipeline_duration.observe(time.perf_counter() - _t0)
+            await self._persist_run_metrics(result)
             return result
         finally:
             metrics.active_pipelines.dec()
+
+    async def _persist_run_metrics(self, result: PipelineResult) -> None:
+        try:
+            await self._pg.record_pipeline_run_completion(
+                error_id=result.error_id,
+                status=result.status,
+                stage_reached=result.stage_reached,
+                stages_completed=result.stages_completed,
+                sandbox_iterations=result.sandbox_iterations,
+                security_retries=result.security_retries,
+                escalation_trigger=result.escalation_trigger,
+                error_message=result.failure_reason,
+            )
+        except Exception as err:
+            logger.warning("Failed to persist pipeline run metrics for %s: %s", result.error_id, err)
 
     # ──────────────────────────────────────────────────────────────────────────
     # Core pipeline
@@ -189,6 +208,10 @@ class Orchestrator:
 
         # ── Stage 5: Escalation gate ───────────────────────────────────────
         if root_cause.suggested_strategy == "human_escalation" or root_cause.confidence < 0.35:
+            if root_cause.confidence < 0.35:
+                result.escalation_trigger = "confidence_gate"
+            else:
+                result.escalation_trigger = "strategy_escalation"
             await self._pg.update_error_status(error_id, "escalated")
             await self._slack.notify_escalation(
                 error_id=error_id, error_class=error["error_class"],
@@ -291,6 +314,7 @@ class Orchestrator:
                 )
                 result.status = "security_blocked"
                 result.stage_reached = "security_blocked"
+                result.escalation_trigger = "security_blocked"
                 await self._pg.update_error_status(error_id, "escalated")
                 return result
 

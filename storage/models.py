@@ -164,8 +164,15 @@ class PipelineRun(Base):
     # Phase 3: tracks whether PatternMemory outcome has been consolidated into Neo4j
     memory_consolidated: Mapped[bool] = mapped_column(Boolean, server_default="false", nullable=False)
     memory_consolidated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    sandbox_iterations: Mapped[int] = mapped_column(Integer, server_default="0", default=0, nullable=False)
+    security_retries: Mapped[int] = mapped_column(Integer, server_default="0", default=0, nullable=False)
+    escalation_trigger: Mapped[str | None] = mapped_column(String(50))
 
     __table_args__ = (
+        CheckConstraint(
+            "escalation_trigger IN ('confidence_gate','blast_radius','security_blocked','strategy_escalation')",
+            name="chk_pipeline_runs_escalation_trigger"
+        ),
         Index("idx_pipeline_runs_error_id", "error_id"),
         Index("idx_pipeline_runs_status", "status"),
         Index("idx_pipeline_memory", "memory_consolidated"),
