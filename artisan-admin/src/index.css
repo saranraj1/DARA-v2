@@ -1,0 +1,145 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* DARA — terminal / engineer console aesthetic.
+   Dark, dense, mono-first. Phosphor amber + signal green accents. */
+
+@layer base {
+  :root {
+    /* base surfaces */
+    --background: 220 14% 7%;          /* near-black with cool tint */
+    --foreground: 60 12% 88%;          /* warm off-white phosphor */
+
+    --surface-1: 220 13% 9%;
+    --surface-2: 220 12% 12%;
+    --surface-3: 220 11% 15%;
+
+    --card: 220 13% 9%;
+    --card-foreground: 60 12% 88%;
+
+    --popover: 220 13% 10%;
+    --popover-foreground: 60 12% 88%;
+
+    /* primary = phosphor amber */
+    --primary: 38 92% 58%;
+    --primary-foreground: 220 20% 8%;
+
+    /* secondary = dim slate */
+    --secondary: 220 12% 16%;
+    --secondary-foreground: 60 8% 80%;
+
+    --muted: 220 11% 13%;
+    --muted-foreground: 220 8% 55%;
+
+    --accent: 220 12% 16%;
+    --accent-foreground: 60 12% 88%;
+
+    /* signals */
+    --signal-ok: 142 70% 48%;
+    --signal-warn: 38 92% 58%;
+    --signal-err: 0 78% 60%;
+    --signal-info: 199 89% 60%;
+    --signal-violet: 270 70% 68%;
+
+    --destructive: 0 78% 55%;
+    --destructive-foreground: 60 12% 95%;
+
+    --border: 220 10% 18%;
+    --input: 220 10% 18%;
+    --ring: 38 92% 58%;
+
+    --radius: 0.25rem;
+
+    --sidebar-background: 220 14% 6%;
+    --sidebar-foreground: 60 8% 70%;
+    --sidebar-primary: 38 92% 58%;
+    --sidebar-primary-foreground: 220 20% 8%;
+    --sidebar-accent: 220 12% 11%;
+    --sidebar-accent-foreground: 60 12% 90%;
+    --sidebar-border: 220 10% 13%;
+    --sidebar-ring: 38 92% 58%;
+  }
+
+  .light {
+    /* not designed for; dark is canonical */
+    --background: 0 0% 100%;
+    --foreground: 220 14% 7%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  html, body, #root {
+    @apply h-full;
+  }
+  body {
+    @apply bg-background text-foreground font-mono antialiased;
+    font-feature-settings: "ss01", "cv11", "calt";
+    background-image:
+      radial-gradient(circle at 20% 0%, hsl(38 92% 58% / 0.04), transparent 40%),
+      radial-gradient(circle at 90% 100%, hsl(199 89% 60% / 0.03), transparent 40%);
+    background-attachment: fixed;
+  }
+
+  /* faint scanline texture — sparingly applied with .scanlines */
+  .scanlines {
+    position: relative;
+  }
+  .scanlines::after {
+    content: "";
+    position: absolute; inset: 0;
+    pointer-events: none;
+    background: repeating-linear-gradient(
+      to bottom,
+      transparent 0 2px,
+      hsl(0 0% 100% / 0.012) 2px 3px
+    );
+    mix-blend-mode: overlay;
+  }
+
+  /* selection */
+  ::selection { background: hsl(var(--primary) / 0.35); color: hsl(var(--foreground)); }
+
+  /* scrollbars */
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-track { background: hsl(var(--surface-1)); }
+  ::-webkit-scrollbar-thumb { background: hsl(var(--border)); border: 2px solid hsl(var(--surface-1)); border-radius: 0; }
+  ::-webkit-scrollbar-thumb:hover { background: hsl(var(--muted-foreground) / 0.5); }
+}
+
+@layer components {
+  .hairline { @apply border border-border; }
+  .grid-bg {
+    background-image:
+      linear-gradient(hsl(var(--border) / 0.35) 1px, transparent 1px),
+      linear-gradient(90deg, hsl(var(--border) / 0.35) 1px, transparent 1px);
+    background-size: 32px 32px;
+  }
+  .label-mono {
+    @apply font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground;
+  }
+  .chip {
+    @apply inline-flex items-center gap-1.5 px-1.5 py-0.5 text-[10px] uppercase tracking-wider font-medium border;
+  }
+  .blink { animation: blink 1.6s steps(2, end) infinite; }
+}
+
+@keyframes blink {
+  50% { opacity: 0.25; }
+}
+@keyframes pulse-dot {
+  0%, 100% { box-shadow: 0 0 0 0 hsl(var(--signal-ok) / 0.5); }
+  50% { box-shadow: 0 0 0 6px hsl(var(--signal-ok) / 0); }
+}
+.pulse-dot { animation: pulse-dot 2s infinite; }
+
+/* Live-tail row flash — subtle phosphor glow that fades over ~2.5s */
+@keyframes row-flash {
+  0%   { background-color: hsl(var(--primary) / 0.18); box-shadow: inset 2px 0 0 hsl(var(--primary)); }
+  60%  { background-color: hsl(var(--primary) / 0.08); box-shadow: inset 2px 0 0 hsl(var(--primary) / 0.6); }
+  100% { background-color: transparent; box-shadow: inset 2px 0 0 transparent; }
+}
+.row-fresh { animation: row-flash 2.5s ease-out forwards; }

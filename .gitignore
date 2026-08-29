@@ -41,6 +41,7 @@ node_modules/
 artisan-admin/node_modules/
 artisan-admin/dist/
 artisan-admin/.vite/
+artisan-admin/.git_bak/
 admin_ui/node_modules/
 admin_ui/dist/
 *.tsbuildinfo
