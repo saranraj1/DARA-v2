@@ -11,7 +11,11 @@ import logging
 import time
 from typing import Any
 
-import google.generativeai as genai
+try:
+    import google.generativeai as genai
+except ImportError:
+    genai = None
+
 from openai import AsyncOpenAI, RateLimitError
 
 from config.settings import Settings, get_settings
@@ -64,9 +68,18 @@ class LLMRouter:
         )
 
         # Gemini
-        genai.configure(api_key=settings.google_api_key)
-        self._gemini_flash = genai.GenerativeModel(settings.gemini_flash_model)
-        self._gemini_pro = genai.GenerativeModel(settings.gemini_pro_model)
+        if genai is not None and getattr(settings, "google_api_key", None):
+            try:
+                genai.configure(api_key=settings.google_api_key)
+                self._gemini_flash = genai.GenerativeModel(settings.gemini_flash_model)
+                self._gemini_pro = genai.GenerativeModel(settings.gemini_pro_model)
+            except Exception as e:
+                logger.warning("LLMRouter: Failed to initialize Gemini models: %s", e)
+                self._gemini_flash = None
+                self._gemini_pro = None
+        else:
+            self._gemini_flash = None
+            self._gemini_pro = None
 
         # Provider rate-limit trackers
         self._providers = {

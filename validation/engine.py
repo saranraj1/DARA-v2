@@ -126,7 +126,10 @@ class ValidationEngine:
             sa = await self._static.analyze(patch.file_path, patched_content)
             report.static_analysis = sa
             if not sa.passed:
-                blocking = [f for f in sa.findings if f["code"].startswith(("S", "E9"))]
+                from config.settings import get_settings
+                sec_enabled = get_settings().enable_security_validation
+                block_prefixes = ("S", "E9") if sec_enabled else ("E9",)
+                blocking = [f for f in sa.findings if f["code"].startswith(block_prefixes)]
                 if blocking:
                     report.blocking_issues.extend(
                         [f"[{f['code']}] {f['message']} (line {f['line']})" for f in blocking]

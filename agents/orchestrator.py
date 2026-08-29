@@ -178,17 +178,18 @@ class Orchestrator:
         await self._set_state(error_id, "analyzing")
 
         # ── Stage 2: Pattern library fast path ────────────────────────────
-        template = await self._memory.find_template(error)
-        if template and template.get("success_rate", 0) >= 0.85:
-            logger.info("Orchestrator: template hit for %s", error_id)
-            await self._pg.update_error_status(error_id, "fixed")
-            await self._memory.record_success(
-                error=error, fix=None, root_cause=None,
-                outcome="template_hit", fix_id=template.get("template_id", ""),
-            )
-            result.status = "template_hit"
-            result.stage_reached = "template"
-            return result
+        if self._settings.enable_pattern_memory:
+            template = await self._memory.find_template(error)
+            if template and template.get("success_rate", 0) >= 0.85:
+                logger.info("Orchestrator: template hit for %s", error_id)
+                await self._pg.update_error_status(error_id, "fixed")
+                await self._memory.record_success(
+                    error=error, fix=None, root_cause=None,
+                    outcome="template_hit", fix_id=template.get("template_id", ""),
+                )
+                result.status = "template_hit"
+                result.stage_reached = "template"
+                return result
 
         # ── Stage 3: Build context ─────────────────────────────────────────
         bundle = await self._builder.build(error)
@@ -237,6 +238,7 @@ class Orchestrator:
 
         # Critical blast radius: escalate immediately (no PR, no auto-approve)
         if blast_report.risk_level == "critical":
+            result.escalation_trigger = "critical_blast_radius"
             logger.warning(
                 "Orchestrator: CRITICAL blast radius for error=%s — escalating", error_id
             )
@@ -320,11 +322,16 @@ class Orchestrator:
 
         # Gate: block if validation failed
         if not validation.passed:
-            review.overall_recommendation = "reject"
+            if self._settings.enable_reviewer_gate:
+                review.overall_recommendation = "reject"
+            if not result.escalation_trigger:
+                result.escalation_trigger = "sandbox_failure"
             if not review.rejection_reason:
                 review.rejection_reason = (
                     f"Validation failed: {', '.join(validation.blocking_issues[:2])}"
                 )
+        elif review.overall_recommendation == "reject" and not result.escalation_trigger:
+            result.escalation_trigger = "review_rejected"
 
         # ── Stage 9: Persist fix ───────────────────────────────────────────
         fix_id = await self._pg.save_fix({
@@ -397,7 +404,12 @@ class Orchestrator:
         result.slack_sent = slack_sent
 
         # ── Stage 12: GitHub PR ────────────────────────────────────────────
-        if review.overall_recommendation in ("approve", "approve_with_comments"):
+        should_create_pr = (
+            (review.overall_recommendation in ("approve", "approve_with_comments"))
+            if self._settings.enable_reviewer_gate
+            else True
+        )
+        if should_create_pr:
             repo_full_name = self._resolve_github_repo(error.get("service", ""))
             pr_info = await self._github.create_pr(
                 repo_full_name=repo_full_name, fix_id=fix_id,

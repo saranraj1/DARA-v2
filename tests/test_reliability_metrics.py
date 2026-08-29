@@ -202,7 +202,7 @@ class TestReliabilityMetricsPersistence:
             stages_completed=result.stages_completed,
             sandbox_iterations=3,
             security_retries=0,
-            escalation_trigger=None,
+            escalation_trigger="sandbox_failure",
             error_message=None,
         )
 

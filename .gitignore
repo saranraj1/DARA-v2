@@ -44,3 +44,5 @@ artisan-admin/.vite/
 admin_ui/node_modules/
 admin_ui/dist/
 *.tsbuildinfo
+.reentry/
+.titan/

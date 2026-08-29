@@ -1,0 +1,80 @@
+{
+  "methodology": {
+    "date": "2026-07-04",
+    "commit_sha": "4471144706b5ec8c4fccb33f481d3561d84ab25e",
+    "model": "Llama-3.3-70b-versatile",
+    "llm_mode": "groq",
+    "number_of_runs": 18,
+    "rate_limit_delays_used": "8.0s"
+  },
+  "postgres_metrics": {
+    "errors_by_severity_source": [
+      {
+        "severity": "critical",
+        "source": "direct",
+        "count": 4
+      },
+      {
+        "severity": "high",
+        "source": "direct",
+        "count": 11
+      },
+      {
+        "severity": "medium",
+        "source": "direct",
+        "count": 17
+      }
+    ],
+    "fixes_by_status": [
+      {
+        "outcome": "pending",
+        "count": 15
+      },
+      {
+        "outcome": "accepted",
+        "count": 2
+      }
+    ],
+    "auto_approve_rate": 0.0,
+    "pipeline_runs_status": [
+      {
+        "status": "started",
+        "count": 31
+      }
+    ]
+  },
+  "calibration_data": [
+    {
+      "bucket": "0.0-0.35",
+      "count": 0,
+      "success_rate": "N/A"
+    },
+    {
+      "bucket": "0.35-0.5",
+      "count": 0,
+      "success_rate": "N/A"
+    },
+    {
+      "bucket": "0.5-0.7",
+      "count": 3,
+      "success_rate": "66.7% (2/3)"
+    },
+    {
+      "bucket": "0.7-0.88",
+      "count": 10,
+      "success_rate": "100.0% (10/10)"
+    },
+    {
+      "bucket": ">=0.88",
+      "count": 5,
+      "success_rate": "40.0% (2/5)"
+    }
+  ],
+  "prometheus_metrics": {
+    "dara_pipelines_total": [],
+    "dara_pipeline_duration_seconds_median": [],
+    "dara_pipeline_duration_seconds_p95": [],
+    "dara_fixes_generated_total": [],
+    "dara_fixes_reviewed_total": []
+  }
+}

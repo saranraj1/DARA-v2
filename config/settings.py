@@ -174,9 +174,30 @@ class PipelineSettings(BaseSettings):
     max_files_for_auto_merge: int = Field(default=1)
     max_lines_for_auto_merge: int = Field(default=15)
     llm_cache_ttl_seconds: int = Field(default=3600)
-    embedding_batch_size: int = Field(default=32)
     context_recency_window_hours: int = Field(default=72)
     git_commit_history_days: int = Field(default=30)
+
+    # ── Ablation & Experiment Flags (Default: True = production safe) ──
+    enable_pattern_memory: bool = Field(
+        default=True,
+        description="Enable PatternMemory fast path template matching",
+    )
+    enable_semantic_retrieval: bool = Field(
+        default=True,
+        description="Enable Qdrant semantic vector search in ContextBuilder",
+    )
+    enable_self_healing: bool = Field(
+        default=True,
+        description="Enable iterative Debugger→Fixer self-healing loop in sandbox",
+    )
+    enable_security_validation: bool = Field(
+        default=True,
+        description="Enable Bandit/Semgrep security audit in validation and review",
+    )
+    enable_reviewer_gate: bool = Field(
+        default=True,
+        description="Enable ReviewerAgent quality and security approval gate",
+    )
 
 
 class Settings(

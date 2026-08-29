@@ -31,6 +31,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from api.models.agent_schemas import Fix, RootCauseResult
+from config.settings import get_settings
 from validation.test_runner import TestRunResult, TestRunner
 
 logger = logging.getLogger(__name__)
@@ -91,8 +92,9 @@ class SandboxRunner:
         current_fix = fix
         last_failure = ""
 
-        for iteration in range(1, MAX_ITERATIONS + 1):
-            logger.info("SandboxRunner: iteration %d/%d", iteration, MAX_ITERATIONS)
+        max_iter = MAX_ITERATIONS if get_settings().enable_self_healing else 1
+        for iteration in range(1, max_iter + 1):
+            logger.info("SandboxRunner: iteration %d/%d", iteration, max_iter)
 
             if await self._docker_ok():
                 result = await self._run_in_docker(current_fix)
@@ -113,7 +115,7 @@ class SandboxRunner:
             )
 
             # No agents supplied, or last iteration — stop here
-            if not (debugger and fixer and bundle) or iteration == MAX_ITERATIONS:
+            if not (debugger and fixer and bundle) or iteration == max_iter:
                 break
 
             # Internal iteration: ask DebuggerAgent to analyse the failure,

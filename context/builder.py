@@ -70,13 +70,13 @@ class ContextBuilder:
                 used += count_tokens(ec_chunk.content)
         query = f"{ec}: {msg}"
         code_budget = min(budget - used, 3000)
-        if code_budget > 200:
+        if self._settings.enable_semantic_retrieval and code_budget > 200:
             related = await self._retriever.retrieve_relevant_code(
                 query=query, error_file=fp, service=svc, token_budget=code_budget, limit=8)
             b.related_functions = related
             used += sum(count_tokens(c.get("content", "")) for c in related)
         bug_budget = min(budget - used, 1500)
-        if bug_budget > 200:
+        if self._settings.enable_semantic_retrieval and bug_budget > 200:
             b.similar_past_bugs = await self._retriever.retrieve_similar_errors(
                 error_summary=query, error_class=ec, limit=5)
         if (budget - used) > 100:

@@ -170,7 +170,7 @@ class PipelineRun(Base):
 
     __table_args__ = (
         CheckConstraint(
-            "escalation_trigger IN ('confidence_gate','blast_radius','security_blocked','strategy_escalation')",
+            "escalation_trigger IS NULL OR escalation_trigger IN ('confidence_gate', 'blast_radius', 'security_blocked', 'strategy_escalation', 'low_confidence', 'high_regression_risk', 'critical_blast_radius', 'sandbox_failure', 'review_rejected', 'patch_application_failure')",
             name="chk_pipeline_runs_escalation_trigger"
         ),
         Index("idx_pipeline_runs_error_id", "error_id"),

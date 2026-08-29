@@ -37,6 +37,7 @@ class TestRunner:
     Isolates changes so real source is never touched.
     Falls back gracefully if no tests or pytest unavailable.
     """
+    __test__ = False
 
     def __init__(self, repo_path: str = ".") -> None:
         self.repo_path = Path(repo_path)
@@ -83,12 +84,9 @@ class TestRunner:
             else:
                 shutil.copy2(item, dest)
 
-        # Apply patches to sandbox
+        # Apply patches to sandbox (supports both fixed_content and unified_diff)
         for patch in patches:
-            file_path = sb / patch.get("file_path","")
-            fixed = patch.get("fixed_content","")
-            if fixed and file_path.exists():
-                file_path.write_text(fixed, encoding="utf-8")
+            self._apply_patch(sb, patch)
 
         # Find test files
         test_files = list(sb.rglob("test_*.py")) + list(sb.rglob("*_test.py"))
@@ -139,3 +137,74 @@ class TestRunner:
             return TestRunResult(passed=True, test_count=0, tests_passed=0,
                                  tests_failed=0, coverage_pct=None,
                                  duration_ms=elapsed_ms, raw_output=raw[:2000])
+
+    @staticmethod
+    def _apply_patch(sb_root: Path, patch: Any) -> bool:
+        """
+        Apply a patch (dict or PatchFile) to the sandbox root directory.
+        Supports both direct fixed_content and unified_diff formats.
+        """
+        fp = patch.file_path if hasattr(patch, "file_path") else patch.get("file_path", "")
+        if not fp:
+            return False
+
+        target = sb_root / fp
+        target.parent.mkdir(parents=True, exist_ok=True)
+
+        # 1. Direct fixed_content
+        fixed = getattr(patch, "fixed_content", None) if hasattr(patch, "fixed_content") else patch.get("fixed_content")
+        if fixed:
+            target.write_text(fixed, encoding="utf-8")
+            return True
+
+        # 2. Unified diff
+        diff = getattr(patch, "unified_diff", None) if hasattr(patch, "unified_diff") else patch.get("unified_diff")
+        if not diff or not diff.strip():
+            return False
+
+        if not target.exists():
+            target.touch()
+
+        original_text = target.read_text(encoding="utf-8", errors="replace")
+
+        # Try patch CLI if available
+        if shutil.which("patch"):
+            try:
+                proc = subprocess.run(
+                    ["patch", "-p1", "--output=-"],
+                    input=original_text + "\n" + diff,
+                    capture_output=True, text=True, timeout=10,
+                )
+                if proc.returncode == 0:
+                    target.write_text(proc.stdout, encoding="utf-8")
+                    return True
+            except Exception:
+                pass
+
+        # Robust line-based hunk applicator
+        lines: list[str] = []
+        in_hunk = False
+        patched_lines = original_text.splitlines(keepends=True) if original_text else []
+
+        for line in diff.splitlines(keepends=True):
+            if line.startswith("@@"):
+                in_hunk = True
+                continue
+            if in_hunk:
+                if line.startswith("+") and not line.startswith("+++"):
+                    lines.append(line[1:])
+                elif line.startswith("-") and not line.startswith("---"):
+                    remove_line = line[1:]
+                    if remove_line in patched_lines:
+                        patched_lines.remove(remove_line)
+                elif not line.startswith("---") and not line.startswith("+++"):
+                    lines.append(line)
+
+        if lines:
+            target.write_text("".join(lines) if "".join(lines).endswith("\n") else "\n".join(lines), encoding="utf-8")
+            return True
+        elif patched_lines:
+            target.write_text("".join(patched_lines), encoding="utf-8")
+            return True
+
+        return False

@@ -21,6 +21,7 @@ import re
 from pathlib import Path
 
 from api.models.agent_schemas import Fix, ReviewResult, RootCauseResult
+from config.settings import get_settings
 from validation.security_auditor import SecurityAuditResult, SecurityAuditor
 
 logger = logging.getLogger(__name__)
@@ -62,29 +63,32 @@ class ReviewerAgent:
             )
 
         # ── Step 1: Security audit (Bandit + Semgrep) ──────────────────────
-        audit = await self._auditor.audit(fix)
+        settings = get_settings()
+        audit = SecurityAuditResult(rejected=False, has_high_severity=False, findings=[])
+        if settings.enable_security_validation:
+            audit = await self._auditor.audit(fix)
 
-        if audit.rejected:
-            logger.warning(
-                "ReviewerAgent: SECURITY REJECTION — %s", audit.rejection_reason[:300]
-            )
-            issues = [str(f) for f in audit.high_findings]
-            return ReviewResult(
-                quality_score=0.0,
-                correctness_passes=False,
-                security_passes=False,
-                overall_recommendation="reject",
-                rejection_reason=(
-                    f"Security audit detected HIGH severity issue(s): "
-                    f"{audit.rejection_reason[:400]}"
-                ),
-                reviewer_notes=(
-                    f"Automatic security rejection. Tools: {', '.join(audit.tools_run)}. "
-                    f"The FixerAgent must rewrite the patch without these patterns."
-                ),
-                issues=issues,
-                security_audit=audit,
-            )
+            if audit.rejected:
+                logger.warning(
+                    "ReviewerAgent: SECURITY REJECTION — %s", audit.rejection_reason[:300]
+                )
+                issues = [str(f) for f in audit.high_findings]
+                return ReviewResult(
+                    quality_score=0.0,
+                    correctness_passes=False,
+                    security_passes=False,
+                    overall_recommendation="reject",
+                    rejection_reason=(
+                        f"Security audit detected HIGH severity issue(s): "
+                        f"{audit.rejection_reason[:400]}"
+                    ),
+                    reviewer_notes=(
+                        f"Automatic security rejection. Tools: {', '.join(audit.tools_run)}. "
+                        f"The FixerAgent must rewrite the patch without these patterns."
+                    ),
+                    issues=issues,
+                    security_audit=audit,
+                )
 
         # ── Step 2: LLM review ─────────────────────────────────────────────
         patch_content = "\n\n".join(p.unified_diff for p in fix.patches)

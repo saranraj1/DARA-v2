@@ -1,0 +1,9 @@
+case_id,error_class,pipeline_status,stage_reached,confidence,strategy,escalation_trigger,sandbox_passed,sandbox_iterations,security_passed,security_retries,auto_approved,ground_truth_match,failure_category,execution_duration_ms,notes
+BM-001,AttributeError,fixed,fixed,0.91,llm_single_file,,True,1,True,0,True,True,success,90,Verified fix generated and sandbox passed.
+BM-002,KeyError,fixed,fixed,0.91,llm_single_file,,True,1,True,0,True,True,success,73,Verified fix generated and sandbox passed.
+BM-003,IndexError,fixed,fixed,0.91,llm_single_file,,True,1,True,0,True,True,success,57,Verified fix generated and sandbox passed.
+BM-004,ZeroDivisionError,fixed,fixed,0.91,llm_single_file,,True,1,True,0,True,True,success,83,Verified fix generated and sandbox passed.
+BM-005,ValueError,security_blocked,security_blocked,0.45,llm_single_file,security_blocked,True,1,False,3,False,True,security_blocked,57,Blocked by SecurityAuditor static analysis.
+BM-006,InterfaceError,escalated,escalated,0.78,llm_multi_file,critical_blast_radius,True,1,True,0,False,True,escalation_expected,60,Escalated due to multi-service critical blast radius.
+BM-007,UnresolvableSystemState,escalated,escalated,0.25,human_escalation,confidence_gate,True,0,True,0,False,True,escalation_expected,45,Escalated due to confidence below threshold (<0.35).
+BM-008,TypeError,fixed,fixed,0.91,llm_single_file,,True,1,True,0,True,True,success,49,Verified fix generated and sandbox passed.
